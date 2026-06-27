@@ -7,19 +7,35 @@ import subprocess
 import sys
 
 
+def _dolt_container() -> str:
+    import os
+    if name := os.getenv("DOLT_CONTAINER"):
+        return name
+    result = subprocess.run(
+        ["docker", "ps", "--filter", "ancestor=dolthub/dolt-sql-server:latest", "--format", "{{.Names}}"],
+        capture_output=True, text=True, check=False,
+    )
+    names = [n.strip() for n in result.stdout.splitlines() if n.strip()]
+    if not names:
+        raise RuntimeError("No Dolt container found — run: docker compose up -d dolt")
+    return names[0]
+
+
 def main() -> None:
+    container = _dolt_container()
     sql = (
         "CREATE USER IF NOT EXISTS 'scope'@'%' IDENTIFIED BY ''; "
         "GRANT ALL ON *.* TO 'scope'@'%'; FLUSH PRIVILEGES;"
     )
-    cmd = ["docker", "exec", "platform-dolt-1", "dolt", "sql", "-q", sql]
+    cmd = ["docker", "exec", container, "dolt", "sql", "-q", sql]
     print("Running:", " ".join(cmd))
     subprocess.run(cmd, check=True)
-    print("Dolt user 'scope' ready for gateway connections.")
+    print(f"Dolt user 'scope' ready (container: {container}).")
 
 
 if __name__ == "__main__":
     try:
         main()
-    except subprocess.CalledProcessError as e:
-        sys.exit(e.returncode)
+    except (subprocess.CalledProcessError, RuntimeError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(getattr(e, "returncode", 1) or 1)

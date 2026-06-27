@@ -1,0 +1,14 @@
+{
+  "decision": "ESCALATE_HUMAN",
+  "session_id": "sess_demo_001",
+  "tool_id": "slack.search_messages",
+  "resource_id": "slack_channel:sales-acme",
+  "context_path": [
+    "sess_demo_001",
+    "recipe_sales_renewal_v3",
+    "slack.search_messages",
+    "slack:channels:history",
+    "slack_channel:sales-acme"
+  ],
+  "rules": ["escalate_human"]
+}

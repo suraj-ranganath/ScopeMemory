@@ -6,6 +6,7 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Any
 
+from config import TRUST_SCORE_MIN, TRUST_SCORE_SENSITIVE
 from policy_contracts import (
     AuthorizationCheckState,
     Decision,
@@ -18,6 +19,7 @@ from policy_contracts import (
 
 
 LOW_PRECEDENCE_DEFAULT_DENY = 10
+TRUST_SENSITIVE_ESCALATION_PRECEDENCE = 75
 PRECEDENCE = {
     Decision.DENY.value: 100,
     Decision.REPAIR.value: 80,
@@ -35,6 +37,7 @@ DEFAULT_TOOL_RISK = {
 }
 
 HARD_DENY_PRECEDENCE = {
+    "deny_low_trust": 110,
     "deny_direct_secret_read": 109,
     "deny_secret_exposure": 108,
     "deny_bulk_export": 107,
@@ -100,6 +103,7 @@ credential_binding[binding, tool, scope, credential_ref, provider, ref_status, i
 judge_fact[s, tool, fact_name, fact_value, confidence] <- $judge_fact
 violation[s, tool, resource, violation_type] <- $violation
 policy_flag[s, flag_name, flag_value] <- $policy_flag
+agent_trust_state[s, score, below_minimum, below_sensitive] <- $agent_trust_state
 
 required_scope[s, tool, scope] :=
   requested_tool[s, tool],
@@ -121,6 +125,17 @@ memory_consistent[s, tool, resource, scope] :=
 same_team_resource[s, resource] :=
   session[s, _user, team, _agent, _goal_class],
   resource[resource, team, _sensitivity, _external]
+
+low_agent_trust[s] :=
+  agent_trust_state[s, _score, true, _below_sensitive]
+
+low_trust_external_write[s, tool, resource] :=
+  requested_tool[s, tool],
+  requested_resource[s, resource],
+  required_scope[s, tool, scope],
+  tool_scope[tool, scope, "write", _risk],
+  resource[resource, _team, _sensitivity, true],
+  agent_trust_state[s, _score, _below_minimum, true]
 
 risk_auto_approvable[risk] <- [["low"], ["medium"]]
 
@@ -156,6 +171,14 @@ hard_deny[s, tool, resource, hard_precedence, reason, rule] :=
 hard_deny[s, tool, resource, hard_precedence, reason, rule] :=
   requested_tool[s, tool],
   requested_resource[s, resource],
+  low_agent_trust[s],
+  hard_precedence = 110,
+  reason = "agent trust score below minimum",
+  rule = "deny_low_trust"
+
+hard_deny[s, tool, resource, hard_precedence, reason, rule] :=
+  requested_tool[s, tool],
+  requested_resource[s, resource],
   session[s, _user, team, _agent, _goal_class],
   resource[resource, resource_team, _sensitivity, _external],
   team != resource_team,
@@ -179,6 +202,7 @@ hard_deny[s, tool, resource, hard_precedence, reason, rule] :=
   tool_scope[tool, scope, "write", _risk],
   resource[resource, _team, _sensitivity, true],
   not policy_flag[s, "external_write_predicted", true],
+  not low_trust_external_write[s, tool, resource],
   hard_precedence = 104,
   reason = "external write not predicted as safe",
   rule = "deny_external_write"
@@ -248,6 +272,20 @@ candidate[s, tool, resource, decision, precedence, reason, rule] :=
   precedence = 80,
   reason = "tool arguments can be safely repaired",
   rule = "repair_schema_args"
+
+candidate[s, tool, resource, decision, precedence, reason, rule] :=
+  requested_tool[s, tool],
+  requested_resource[s, resource],
+  required_scope[s, tool, _scope],
+  schema_state[s, tool, true, _repairable],
+  recipe_predicts_tool[s, tool],
+  same_team_resource[s, resource],
+  low_trust_external_write[s, tool, resource],
+  not hard_deny[s, tool, resource, _hard_precedence, _hard_reason, _hard_rule],
+  decision = "ESCALATE_HUMAN",
+  precedence = 75,
+  reason = "external write requires higher agent trust",
+  rule = "escalate_low_trust_external"
 
 candidate[s, tool, resource, decision, precedence, reason, rule] :=
   requested_tool[s, tool],
@@ -360,6 +398,7 @@ def compile_policy_facts(ctx: dict[str, Any]) -> CompiledPolicyFacts:
     similarity_reified = bool(raw_facts.get("similarity_reified", True))
     similarity_score = float(raw_facts.get("similarity_score", 1.0 if recipe_id != "recipe_unknown" else 0.0))
     context_snapshot_present = bool(raw_facts.get("context_snapshot_present", bool(context_path)))
+    agent_trust_score = _optional_float(raw_facts.get("agent_trust_score"))
 
     session = Session(
         session_id=session_id,
@@ -401,6 +440,7 @@ def compile_policy_facts(ctx: dict[str, Any]) -> CompiledPolicyFacts:
         "judge_fact": _judge_rows(session_id, tool_id, raw_facts),
         "violation": _violation_rows(session_id, tool_id, resource_id, raw_facts),
         "policy_flag": _policy_flag_rows(session_id, raw_facts, context_snapshot_present),
+        "agent_trust_state": _agent_trust_state_rows(session_id, agent_trust_score),
     }
 
     facts = _fact_strings(rows)
@@ -551,6 +591,10 @@ def _evaluate_with_python(compiled: CompiledPolicyFacts, fallback_error: Excepti
     )
     flags = {(row[1], row[2]) for row in rows["policy_flag"]}
     violations = {row[3] for row in rows["violation"]}
+    trust_row = rows["agent_trust_state"][0] if rows["agent_trust_state"] else None
+    below_trust_minimum = bool(trust_row[2]) if trust_row else False
+    below_sensitive_trust = bool(trust_row[3]) if trust_row else False
+    low_trust_external_write = bool(external and access_kind == "write" and below_sensitive_trust)
 
     candidates: list[dict[str, Any]] = []
 
@@ -567,11 +611,13 @@ def _evaluate_with_python(compiled: CompiledPolicyFacts, fallback_error: Excepti
         hard_denies.append(("schema invalid and not safely repairable", "deny_schema_invalid"))
     if not has_delegation:
         hard_denies.append(("no delegation for agent on session", "deny_no_delegation"))
+    if below_trust_minimum:
+        hard_denies.append(("agent trust score below minimum", "deny_low_trust"))
     if team_id != resource_team:
         hard_denies.append(("resource not owned by session team", "deny_wrong_team"))
     if schema_valid and not recipe_predicts_tool:
         hard_denies.append(("recipe did not predict this tool", "deny_unpredicted_tool"))
-    if external and access_kind == "write" and ("external_write_predicted", True) not in flags:
+    if external and access_kind == "write" and ("external_write_predicted", True) not in flags and not low_trust_external_write:
         hard_denies.append(("external write not predicted as safe", "deny_external_write"))
     if scope in {"admin", "linear:admin", "slack:admin", "scopememory:admin"} and ("break_glass", True) not in flags:
         hard_denies.append(("admin scope requires break-glass approval", "deny_admin_scope"))
@@ -593,6 +639,20 @@ def _evaluate_with_python(compiled: CompiledPolicyFacts, fallback_error: Excepti
 
     if not hard_denies and not schema_valid and schema_repairable:
         add(Decision.REPAIR, PRECEDENCE[Decision.REPAIR.value], "tool arguments can be safely repaired", "repair_schema_args")
+
+    if (
+        not hard_denies
+        and schema_valid
+        and recipe_predicts_tool
+        and team_id == resource_team
+        and low_trust_external_write
+    ):
+        add(
+            Decision.ESCALATE_HUMAN,
+            TRUST_SENSITIVE_ESCALATION_PRECEDENCE,
+            "external write requires higher agent trust",
+            "escalate_low_trust_external",
+        )
 
     if (
         not hard_denies
@@ -657,6 +717,28 @@ def _path_at(path: list[str], index: int, default: str) -> str:
 
 def _hash_path(path: list[str]) -> str:
     return "sha256:" + hashlib.sha256("|".join(path).encode("utf-8")).hexdigest()
+
+
+def _optional_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _agent_trust_state_rows(session_id: str, trust_score: float | None) -> list[list[Any]]:
+    if trust_score is None:
+        return []
+    return [
+        [
+            session_id,
+            trust_score,
+            trust_score < TRUST_SCORE_MIN,
+            trust_score < TRUST_SCORE_SENSITIVE,
+        ]
+    ]
 
 
 def _credential_required_rows(tool_id: str, facts: dict[str, Any]) -> list[list[Any]]:
@@ -775,6 +857,14 @@ def _proof_rules(rule: str) -> list[str]:
             "same_team_resource",
             "memory_consistent",
             "escalate_human_required_scope",
+        ],
+        "escalate_low_trust_external": [
+            "required_scope",
+            "recipe_predicts_tool",
+            "same_team_resource",
+            "agent_trust_state",
+            "low_trust_external_write",
+            "escalate_low_trust_external",
         ],
         "repair_schema_args": ["schema_state", "repair_schema_args"],
     }

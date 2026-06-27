@@ -113,6 +113,29 @@ class PolicyAgentTests(unittest.TestCase):
         self.assertEqual(result.reason, "external write not predicted as safe")
         self.assertIn("deny_external_write", result.proof.rules)
 
+    def test_agent_trust_below_minimum_is_denied(self):
+        result = decide(demo_ctx(agent_trust_score=0.4))
+
+        self.assertEqual(result.decision.value, "DENY")
+        self.assertEqual(result.reason, "agent trust score below minimum")
+        self.assertIn("deny_low_trust", result.proof.rules)
+
+    def test_external_write_low_sensitive_trust_escalates_over_grant(self):
+        result = decide(demo_ctx(
+            tool="slack.post_message",
+            resource="slack_channel:external-partners",
+            scope="slack:chat:write",
+            grant_present=True,
+            resource_external=True,
+            resource_sensitivity="high",
+            access_kind="write",
+            agent_trust_score=0.7,
+        ))
+
+        self.assertEqual(result.decision.value, "ESCALATE_HUMAN")
+        self.assertEqual(result.reason, "external write requires higher agent trust")
+        self.assertIn("escalate_low_trust_external", result.proof.rules)
+
     def test_repairable_schema_error_returns_repair(self):
         result = decide(demo_ctx(
             grant_present=False,

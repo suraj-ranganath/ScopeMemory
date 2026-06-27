@@ -68,8 +68,10 @@ def sync_to_memgraph() -> int:
             session.run(
                 """
                 MATCH (u:User {id: $uid}), (a:Agent {id: $aid}), (s:Session {id: $sid})
-                MERGE (u)-[:DELEGATES]->(a)
-                SET u.last_delegated_session = $sid
+                MERGE (u)-[d:DELEGATES {session_id: $sid}]->(a)
+                SET d.delegated_at = timestamp()
+                MERGE (u)-[:DELEGATED_FOR {session_id: $sid}]->(s)
+                MERGE (a)-[:ACTS_FOR {session_id: $sid}]->(s)
                 """,
                 uid=row["user_id"], aid=row["agent_id"], sid=row["session_id"],
             )

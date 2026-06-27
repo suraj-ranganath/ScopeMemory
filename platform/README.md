@@ -57,7 +57,7 @@ Expected output: `STACK DEMO PASSED`
 | Agentic-IAM | `/iam/agents/{id}` mock | 8080 |
 | Gateway | FastAPI `app.py` | 8080 |
 | Dolt | `dolthub/dolt-sql-server` | 3306 |
-| Memgraph | optional `--profile memgraph` | 7687 |
+| Memgraph | derived graph (ReBAC + recipe retrieval) | 7687 |
 | Graph fallback | in-process when Memgraph down | — |
 | Policy | deterministic rules (`cozo_policy.py`) | in-process |
 | Audit | `policy_decisions` in Dolt | 3306 |
@@ -76,13 +76,14 @@ curl -X POST http://127.0.0.1:8080/auth/authorize \
 curl http://127.0.0.1:8080/auth/proof/sess_demo_001
 ```
 
-## Memgraph (optional)
+## Memgraph
 
-On Docker Desktop Mac, Memgraph may need `vm.max_map_count` in Docker settings.
-If Memgraph is unavailable, the gateway uses an **in-memory graph fallback** synced from Dolt (same ReBAC logic).
+Memgraph is the **derived query engine** for both ReBAC authorization and recipe retrieval. Dolt remains source of truth; the gateway syncs on preflight/authorize.
+
+If Memgraph is unavailable (e.g. Docker Desktop Mac limits), the gateway falls back to an in-process graph with the same logic.
 
 ```bash
-docker compose --profile memgraph up -d memgraph
+docker compose up -d memgraph
 # health should show "graph_backend":"memgraph"
 ```
 
@@ -108,9 +109,55 @@ docker compose --profile memgraph up -d memgraph
 | `app.py` | Gateway |
 | `run_demo.py` | End-to-end acceptance test |
 
+## Person B demo (RFC-06)
+
+Web UI, fixtures, Memgraph recipe retrieval, learning worker:
+
+```bash
+docker compose --profile gateway-docker up -d --build
+python3 run_person_b_demo.py all
+# UI: http://127.0.0.1:8080/
+```
+
+## Agentic Identity demo (RFC-08)
+
+Delegation lifecycle + identity proof + ReBAC policy:
+
+```bash
+docker compose --profile gateway-docker up -d --build
+python3 run_agentic_identity_demo.py
+```
+
+See `agentic_identity/README.md` and `docs/engineering-plan/plan/RFC-08-agentic-identity-integration.md`.
+
+## MCP gateway demo (RFC-03)
+
+JSON-RPC meta-server with JWT on `tools/call`:
+
+```bash
+docker compose --profile gateway-docker up -d --build
+python3 run_mcp_demo.py
+```
+
+See `mcp/README.md`.
+
+## Streamlit UI
+
+Interactive demo frontend for the full stack (Identity, Auth, Session, MCP):
+
+```bash
+docker compose --profile gateway-docker up -d --build
+./run_ui.sh
+# or: streamlit run streamlit_app.py
+```
+
+Opens at http://localhost:8501 — connects to gateway on :8080.
+
+See `person_b/README.md` for contracts, fixtures, and demo paths.
+
 ## Phase 2
 
-- Swap policy evaluator to embedded CozoDB Datalog
+- Swap policy evaluator to embedded CozoDB Datalog (optional; current demo uses `cozo_policy.py`)
 - Connect live Agentic-IAM API instead of mock
 - Enable Memgraph Lab UI for graph visualization
-- Add MCP JSON-RPC wrapper around gateway endpoints
+- Real downstream MCP proxy + credential broker (RFC-04)

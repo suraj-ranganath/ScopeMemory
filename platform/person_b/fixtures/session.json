@@ -1,0 +1,9 @@
+{
+  "session_id": "sess_demo_001",
+  "user_id": "user_alice",
+  "team_id": "team_sales",
+  "agent_id": "agent_renewal_01",
+  "goal": "Prepare renewal follow-up for Acme. Check recent Slack context and create a Linear issue.",
+  "goal_class": "sales_renewal_prep",
+  "status": "waiting_for_human"
+}

@@ -23,3 +23,9 @@ python run_demo.py all
 See [RFC-07](docs/engineering-plan/plan/RFC-07-2-hour-agentic-identity-demo.md).
 
 **Agentic Identity story:** Agentic-IAM knows who the agent is. ScopeMemory decides what it may do — via relationship traversal, not a broad role.
+
+```bash
+cd platform && python3 run_agentic_identity_demo.py
+cd platform && python3 run_mcp_demo.py
+cd platform && ./run_ui.sh   # Streamlit UI → http://localhost:8501
+```

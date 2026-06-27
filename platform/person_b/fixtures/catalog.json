@@ -1,0 +1,17 @@
+{
+  "version": "1.0",
+  "story": "Sales Renewal Prep — Alice, RenewalBot, Bob approver",
+  "fixtures": [
+    "session",
+    "recipe_hits",
+    "access_request_pending",
+    "access_request_approved",
+    "grant_linear",
+    "policy_decision_allow",
+    "policy_decision_deny_external",
+    "policy_decision_escalate",
+    "slack_search_with_injection",
+    "recipe_proposal_v4",
+    "audit_timeline"
+  ]
+}

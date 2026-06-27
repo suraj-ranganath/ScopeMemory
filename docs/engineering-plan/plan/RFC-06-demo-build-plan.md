@@ -11,7 +11,7 @@ Deferred until RFC-07 2-hour demo is complete and validated.
 Extend the RFC-07 SQLite ReBAC demo into the full ScopeMemory control plane:
 
 - Dolt canonical state
-- Qdrant semantic recipe retrieval
+- Memgraph derived-graph recipe retrieval
 - CozoDB policy engine
 - MCP gateway
 - 1Password credential broker
@@ -27,7 +27,7 @@ Same narrative as RFC-07, plus credential leases, MCP tool proxy, and recipe pro
 | WP | Deliverable | Depends on |
 |----|-------------|------------|
 | WP-01 | Dolt schema (RFC-01 full) + seed | RFC-07 validated |
-| WP-02 | Qdrant indexer | WP-01 |
+| WP-02 | Memgraph recipe retrieval (derived graph) | WP-01 |
 | WP-03 | CozoDB policy (RFC-02) | WP-01 |
 | WP-04 | 1Password broker (RFC-04) | WP-03 |
 | WP-05 | MCP gateway (RFC-03) | WP-03, WP-04 |
@@ -78,7 +78,7 @@ Person B owns the governed memory loop, the visible demo, and all remaining MVP 
 
 - Dolt schema and seed data.
 - Workflow Authorization Recipe model.
-- Qdrant recipe indexing and retrieval.
+- Memgraph recipe indexing and retrieval (derived graph queries, not a separate vector store).
 - Mocked Slack data and prompt-injection scenario fixtures.
 - Web UI: live session, access requests, proof tree, timeline, recipe review, credential lease inspector, and index refresh status.
 - Learning worker that proposes recipe diffs.
@@ -112,14 +112,14 @@ Person B is the owner for WP-01, WP-02, WP-06, WP-07, the demo/fixture portions 
 3. Person B: migrate the RFC-07 SQLite subset into Dolt seed data, recipe model, mocked Slack prompt-injection data, and fixture-backed UI.
 4. Integrate: `auth.preflight_goal` to recipe hits, predicted scopes, access requests, and visible UI state.
 5. Integrate: approved request to grant, optional credential lease, mock Slack/Linear tool execution, and audit event.
-6. Person B: add Qdrant retrieval to replace exact `goal_class` matching.
+6. Person B: wire Memgraph recipe retrieval (Session→Recipe traversals + goal scoring).
 7. Polish: denial path, proof tree, Dolt recipe diff, learning proposal, hooks, and scripted demo fixtures.
 
 ## Full MVP Acceptance
 
 - All RFC-07 demo scenes still pass through the gateway
 - At least one credential lease without agent secret exposure
-- Qdrant retrieval tied to Dolt commit
+- Memgraph recipe retrieval tied to Dolt sync commit
 - Recipe proposal branch and diff visible in UI
 - Prompt-injection deny path for external Slack post
 

@@ -24,26 +24,29 @@ def _probe_memgraph() -> bool:
         return False
 
 
-def backend_name() -> str:
+def backend_name(*, force_probe: bool = False) -> str:
     global _backend
-    if _backend:
-        return _backend
-    if USE_FALLBACK == "inmemory":
-        _backend = "inmemory"
-    elif USE_FALLBACK == "memgraph":
-        _backend = "memgraph"
-    else:
-        _backend = "memgraph" if _probe_memgraph() else "inmemory"
+    if force_probe or _backend is None:
+        if USE_FALLBACK == "inmemory":
+            _backend = "inmemory"
+        elif USE_FALLBACK == "memgraph":
+            _backend = "memgraph" if _probe_memgraph() else "inmemory"
+        else:
+            _backend = "memgraph" if _probe_memgraph() else "inmemory"
     return _backend
 
 
 def sync_graph() -> tuple[int, str]:
-    name = backend_name()
+    name = backend_name(force_probe=True)
     if name == "memgraph":
-        from memgraph_sync import sync_to_memgraph
-        return sync_to_memgraph(), name
+        try:
+            from memgraph_sync import sync_to_memgraph
+            return sync_to_memgraph(), name
+        except Exception:
+            global _backend
+            _backend = "inmemory"
     from graph_fallback import get_inmemory
-    return get_inmemory().reload(), name
+    return get_inmemory().reload(), "inmemory"
 
 
 def preflight_context(session_id: str) -> dict[str, Any]:
@@ -60,3 +63,21 @@ def authorize_context(session_id: str, tool_id: str, resource_id: str) -> dict[s
         return mg(session_id, tool_id, resource_id)
     from graph_fallback import get_inmemory
     return get_inmemory().authorize(session_id, tool_id, resource_id)
+
+
+def search_recipe_hits(
+    team_id: str,
+    goal_class: str,
+    goal_text: str,
+    session_id: str | None = None,
+    limit: int = 3,
+) -> list[dict[str, Any]]:
+    if backend_name() == "memgraph":
+        from memgraph_queries import search_recipe_hits as mg_search, session_recipe_hits
+        if session_id:
+            hits = session_recipe_hits(session_id)
+            if hits:
+                return hits
+        return mg_search(team_id, goal_class, goal_text, limit)
+    from graph_fallback import get_inmemory
+    return get_inmemory().search_recipes(team_id, goal_class, goal_text, limit)

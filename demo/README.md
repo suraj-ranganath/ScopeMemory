@@ -30,4 +30,4 @@ Requires Python 3.12+ and no pip dependencies.
 
 ## Phase 2
 
-See RFC-06 for full MVP (Dolt, Qdrant, MCP gateway, 1Password, UI).
+See RFC-06 for full MVP (Dolt, Memgraph, MCP gateway, 1Password, UI).

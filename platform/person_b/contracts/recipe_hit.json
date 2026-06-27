@@ -1,0 +1,8 @@
+{
+  "recipe_id": "recipe_sales_renewal_v3",
+  "score": 0.89,
+  "dolt_commit": "main",
+  "goal_class": "sales_renewal_prep",
+  "predicted_tools": ["slack.search_messages", "linear.create_issue"],
+  "predicted_scopes": ["slack:channels:history", "linear:issues:create"]
+}

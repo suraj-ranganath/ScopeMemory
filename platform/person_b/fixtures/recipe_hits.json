@@ -1,0 +1,7 @@
+{
+  "recipe_id": "recipe_sales_renewal_v3",
+  "score": 0.89,
+  "title": "Sales Renewal Prep v3",
+  "predicted_tools": ["slack.search_messages", "linear.create_issue"],
+  "predicted_scopes": ["slack:channels:history", "linear:issues:create"]
+}

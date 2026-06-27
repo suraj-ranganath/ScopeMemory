@@ -1,0 +1,11 @@
+{
+  "request_id": "req_slack_history_001",
+  "session_id": "sess_demo_001",
+  "requested_scope": "slack:channels:history",
+  "requested_resource": "slack_channel:sales-acme",
+  "requested_tool_id": "slack.search_messages",
+  "reason": "Sales renewal prep recipe predicts Slack read for customer context",
+  "recipe_id": "recipe_sales_renewal_v3",
+  "status": "pending",
+  "approver_type": null
+}

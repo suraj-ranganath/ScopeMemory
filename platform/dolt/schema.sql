@@ -100,3 +100,50 @@ CREATE TABLE IF NOT EXISTS sync_metadata (
   last_sync_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   row_count INT NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS access_requests (
+  request_id VARCHAR(128) PRIMARY KEY,
+  session_id VARCHAR(128) NOT NULL,
+  user_id VARCHAR(128) NOT NULL,
+  requested_scope VARCHAR(255) NOT NULL,
+  requested_resource VARCHAR(128) NOT NULL,
+  requested_tool_id VARCHAR(128) NOT NULL,
+  reason TEXT NOT NULL,
+  recipe_id VARCHAR(128),
+  status VARCHAR(64) NOT NULL DEFAULT 'pending',
+  approver_id VARCHAR(128),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS recipe_proposals (
+  proposal_id VARCHAR(128) PRIMARY KEY,
+  base_recipe_id VARCHAR(128) NOT NULL,
+  title VARCHAR(255) NOT NULL,
+  goal_class VARCHAR(128) NOT NULL,
+  proposal_json LONGTEXT NOT NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'proposed',
+  evidence_session_id VARCHAR(128),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS session_events (
+  event_id VARCHAR(128) PRIMARY KEY,
+  session_id VARCHAR(128) NOT NULL,
+  event_type VARCHAR(64) NOT NULL,
+  event_json LONGTEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS slack_fixtures (
+  fixture_id VARCHAR(128) PRIMARY KEY,
+  channel_id VARCHAR(128) NOT NULL,
+  payload_json LONGTEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS recipe_index_meta (
+  recipe_id VARCHAR(128) PRIMARY KEY,
+  graph_node_id VARCHAR(128),
+  dolt_commit_hash VARCHAR(128) NOT NULL DEFAULT 'main',
+  content_hash VARCHAR(128) NOT NULL,
+  indexed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
