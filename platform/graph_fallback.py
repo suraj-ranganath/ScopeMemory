@@ -75,14 +75,26 @@ class InMemoryGraph:
         agents = {r["agent_id"]: r for r in self.data.get("agents", [])}
         agent = agents.get(s["agent_id"])
         facts = {
+            "session_id": session_id,
+            "tool_id": tool_id,
+            "resource_id": resource_id,
+            "scope": ts["scope"],
+            "user_id": s["user_id"],
+            "agent_id": s["agent_id"],
+            "session_team": s["team_id"],
+            "resource_team": res["team_id"],
+            "goal_class": s["goal_class"],
             "delegation_present": pf.get("delegation_present", False),
             "recipe_predicts_tool": predicts,
             "same_team": res["team_id"] == s["team_id"],
             "grant_present": grant_present,
             "resource_external": bool(res["external_flag"]),
+            "resource_sensitivity": res["sensitivity"],
             "access_kind": ts["access_kind"],
             "scope_approval_mode": scope_mode,
             "agent_trust_score": agent.get("trust_score") if agent else None,
+            "similarity_score": 1.0 if recipe else 0.0,
+            "similarity_reified": True,
         }
         context_path = [
             session_id,
@@ -99,7 +111,17 @@ class InMemoryGraph:
             "tool_id": tool_id,
             "resource_id": resource_id,
             "context_path": [x for x in context_path if x],
-            "rebac_tuples": [],
+            "rebac_tuples": [
+                t for t in [
+                    f"session:{session_id}#matches@recipe:{recipe['recipe_id']}" if recipe else "",
+                    f"recipe:{recipe['recipe_id']}#predicts_tool@{tool_id}" if predicts and recipe else "",
+                    f"tool:{tool_id}#requires_scope@{ts['scope']}",
+                    f"scope:{ts['scope']}#applies_to@{resource_id}",
+                    f"resource:{resource_id}#owned_by@team:{res['team_id']}",
+                    f"user:{s['user_id']}#delegates@agent:{s['agent_id']}@session:{session_id}" if pf.get("delegation_present", False) else "",
+                ]
+                if t
+            ],
             "facts": facts,
         }
 

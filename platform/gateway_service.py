@@ -5,9 +5,10 @@ from __future__ import annotations
 from typing import Any
 
 from agentic_iam import verify_agent_active
-from cozo_policy import evaluate, export_facts
+from cozo_policy import decide
 from dolt_store import get_session, save_policy_decision
 from graph_backend import authorize_context, backend_name, preflight_context, sync_graph
+from policy_contracts import contract_dict
 
 
 def recipe_hits_for_session(session: dict[str, Any], session_id: str) -> tuple[list[dict[str, Any]], str]:
@@ -83,18 +84,13 @@ def run_authorize(
     if "error" in ctx:
         raise ValueError(ctx["error"])
 
-    decision, reason, rules = evaluate(ctx["facts"])
-    cozo_facts = export_facts(ctx["facts"])
-
+    policy_decision = decide(ctx)
     proof = {
-        "decision": decision,
-        "reason": reason,
+        **contract_dict(policy_decision.proof),
         "context_path": ctx["context_path"],
         "rebac_tuples": ctx["rebac_tuples"],
         "memgraph_facts": ctx["facts"],
-        "cozo_facts": cozo_facts,
-        "rules": rules,
-        "policy_engine": "deterministic-rules",
+        "cozo_facts": policy_decision.proof.facts,
         "delegation_jwt": {
             "verified": True,
             "user_id": jwt_claims.get("user_id"),
@@ -103,12 +99,18 @@ def run_authorize(
         },
     }
 
-    decision_id = save_policy_decision(session_id, tool_id, resource_id, decision, proof)
+    decision_id = save_policy_decision(
+        session_id,
+        tool_id,
+        resource_id,
+        policy_decision.decision.value,
+        proof,
+    )
 
     return {
         "decision_id": decision_id,
-        "decision": decision,
-        "reason": reason,
+        "decision": policy_decision.decision.value,
+        "reason": policy_decision.reason,
         "proof": proof,
         "audit_store": "dolt",
     }
