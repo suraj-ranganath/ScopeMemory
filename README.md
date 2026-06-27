@@ -27,5 +27,5 @@ See [RFC-07](docs/engineering-plan/plan/RFC-07-2-hour-agentic-identity-demo.md).
 ```bash
 cd platform && python3 run_agentic_identity_demo.py
 cd platform && python3 run_mcp_demo.py
-cd platform && ./run_ui.sh   # Streamlit UI → http://localhost:8501
+cd platform && ./run_ui.sh   # React UI → http://localhost:5173
 ```

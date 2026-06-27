@@ -3,62 +3,12 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ScopeMemory Demo</title>
-  <link rel="stylesheet" href="/static/styles.css" />
+  <meta name="theme-color" content="#101315" />
+  <title>ScopeMemory</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%23101315'/%3E%3Cpath d='M15 35c9-20 25 18 34-3' fill='none' stroke='%236ad8c8' stroke-width='5' stroke-linecap='round'/%3E%3Ccircle cx='15' cy='35' r='5' fill='%23f2efe4'/%3E%3Ccircle cx='49' cy='32' r='5' fill='%23f2efe4'/%3E%3C/svg%3E" />
 </head>
 <body>
-  <header>
-    <h1>ScopeMemory Demo</h1>
-    <p class="subtitle">Agentic Identity → SessionGoal → RecipeHits → AccessRequests → Policy</p>
-    <div id="health" class="badge">loading…</div>
-  </header>
-
-  <main class="grid">
-    <section class="panel wide">
-      <h2>Agentic Identity</h2>
-      <div id="identity"></div>
-    </section>
-
-    <section class="panel">
-      <h2>Live Session</h2>
-      <div id="session"></div>
-    </section>
-
-    <section class="panel">
-      <h2>Recipe Hits</h2>
-      <div id="recipes"></div>
-      <button id="btn-index">Sync Graph Index</button>
-      <pre id="index-status"></pre>
-    </section>
-
-    <section class="panel">
-      <h2>Access Requests</h2>
-      <div id="requests"></div>
-    </section>
-
-    <section class="panel wide">
-      <h2>Proof Tree / Policy Decisions</h2>
-      <div id="proof"></div>
-    </section>
-
-    <section class="panel wide">
-      <h2>Timeline</h2>
-      <div id="timeline"></div>
-    </section>
-
-    <section class="panel">
-      <h2>Slack (mock + injection)</h2>
-      <button id="btn-slack">Search #sales-acme</button>
-      <pre id="slack"></pre>
-    </section>
-
-    <section class="panel">
-      <h2>Recipe Learning</h2>
-      <button id="btn-learn">Propose Recipe v4</button>
-      <pre id="proposal"></pre>
-    </section>
-  </main>
-
-  <script src="/static/app.js"></script>
+  <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
 </body>
 </html>

@@ -8,3 +8,8 @@
 __pycache__/
 *.py[cod]
 .venv/
+
+# Web UI
+node_modules/
+platform/web/dist/
+platform/web/.vite/
