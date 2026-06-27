@@ -19,9 +19,12 @@
 - The rough plan's MVP includes Dolt schema, Qdrant recipe retrieval, MCP-ish gateway, policy engine, access request UI, proof timeline, and recipe proposal diff. Source: `INITIAL_ROUGH_PLAN.md:1838-1876`.
 - MCP tools are schema-described external actions with `tools/list`, `tools/call`, `inputSchema`, and tool-list change notifications. Source: MCP tools spec, `https://modelcontextprotocol.io/specification/2025-11-25/server/tools`.
 - MCP authorization includes insufficient-scope behavior that can be represented as richer ScopeMemory access requests. Source: MCP authorization spec, `https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization`.
-- Claude Code hooks include `PreToolUse`, hook input, and optional output that can block or modify tool input. Source: Anthropic Claude Code hooks docs, `https://docs.anthropic.com/en/docs/claude-code/hooks`.
+- Claude Code hooks include `PreToolUse`, hook input, and optional output that can block or modify tool input; MCP tools can be matched with names like `mcp__server__tool`. Source: Claude Code hooks docs, `https://code.claude.com/docs/en/hooks`.
+- Codex hooks include `PreToolUse` for supported Bash, file-edit, and MCP tool calls, with JSON hook input on stdin and JSON denial/rewrite output. Source: OpenAI Codex hooks docs, `https://developers.openai.com/codex/hooks`.
 - 1Password secret references use `op://vault/item/field` style references and can be resolved by CLI flows without putting raw secrets in project files. Source: 1Password CLI secret references docs, `https://www.1password.dev/cli/secret-references`.
-- 1Password environments can load secrets into processes through local `.env` workflows and developer tools without storing plaintext in the repo. Source: 1Password developer docs, `https://www.1password.dev/`.
+- 1Password MCP Server for Codex can manage Environments without returning secrets to the AI tool and can inject runtime variables into the authorized application process. Source: 1Password MCP Server docs, `https://www.1password.dev/environments/mcp-server`.
+- 1Password SDKs support Go, JavaScript, and Python integrations with desktop-app auth and service-account auth. Source: 1Password SDK docs, `https://www.1password.dev/sdks`.
+- Local readiness on 2026-06-27: `/Applications/1Password.app` exists and `op` is installed at `/opt/homebrew/bin/op` version `2.34.1`, but no 1Password CLI account/session is configured and `/Applications/1Password.app/Contents/MacOS/onepassword-mcp` is absent. Source: local checks recorded in `research/credential-injection-hooks-readiness.md`.
 
 ## Canonical Conflict Resolutions
 
@@ -60,5 +63,7 @@
 ## Unverified Claims
 
 - The exact 1Password vault/item structure for the live MVP credential demo.
+- Whether Suraj's local 1Password account has a ScopeMemory Environment enabled for Codex.
+- Whether Suraj will use desktop-auth SDK or a least-privilege service account for the first broker adapter.
 - The exact mocked Slack data set and malicious prompt-injection fixture.
 - Whether the final product will support true cryptographic zero-knowledge proofs beyond zero secret exposure to agents and persistence.

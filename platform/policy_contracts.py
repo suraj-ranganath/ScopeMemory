@@ -29,6 +29,7 @@ class AuthorizationCheckState(str, Enum):
     CREATED = "created"
     FACTS_COMPILED = "facts_compiled"
     POLICY_EVALUATING = "policy_evaluating"
+    PENDING = "pending"
     WAITING_FOR_HUMAN = "waiting_for_human"
     APPROVED = "approved"
     AUTO_APPROVED = "auto_approved"
@@ -124,6 +125,22 @@ class AuditEvent:
     body: dict[str, Any]
     previous_hash: str = ""
     event_hash: str = ""
+
+
+@dataclass(frozen=True)
+class AuthorizationCheck:
+    check_id: str
+    idempotency_key: str
+    session_id: str
+    tool_id: str
+    resource_id: str
+    state: AuthorizationCheckState
+    created_at: str
+    updated_at: str
+    expires_at: str
+    decision: Decision | None = None
+    proof_id: str = ""
+    safe_reason: str = ""
 
 
 @dataclass(frozen=True)
