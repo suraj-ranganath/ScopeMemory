@@ -7,7 +7,7 @@ Person B owns WP-01 (seed), WP-02 (Memgraph recipe retrieval), WP-06 (Web UI), W
 ```
 person_b/
   contracts/     # Shared JSON contract examples
-  fixtures/      # Static fixtures for UI + harness
+  fixtures/      # Static fixtures for UI + harness, including runtime_handoff.json
   memgraph_recipe_index.py
   learning_worker.py
   ui_state.py
@@ -56,3 +56,5 @@ Open the UI at http://127.0.0.1:8080/
 | `POST /demo/recipes/propose` | Learning worker |
 
 Preflight includes `recipe_hits` from Memgraph (or in-memory graph fallback when Memgraph is unavailable).
+
+`fixtures/runtime_handoff.json` is the Person A handoff bundle for replacing static UI panels incrementally with live gateway outputs. Each scenario names the source test that protects its shape and contains no plaintext secret values.

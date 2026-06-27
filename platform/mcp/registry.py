@@ -92,6 +92,27 @@ DOWNSTREAM_TOOLS: list[dict[str, Any]] = [
         ["session_id", "agent_id", "resource_id", "title"],
     ),
     _tool(
+        "linear.search_issues",
+        "Search Linear issues (policy-gated; mock execution in demo).",
+        {
+            **SESSION_ARGS,
+            **RESOURCE_ARG,
+            "query": {"type": "string", "description": "Search query"},
+        },
+        ["session_id", "agent_id", "resource_id", "query"],
+    ),
+    _tool(
+        "linear.add_comment",
+        "Add a Linear issue comment (policy-gated; mock execution in demo).",
+        {
+            **SESSION_ARGS,
+            **RESOURCE_ARG,
+            "issue_id": {"type": "string", "description": "Linear issue id"},
+            "body": {"type": "string", "description": "Comment body"},
+        },
+        ["session_id", "agent_id", "resource_id", "issue_id", "body"],
+    ),
+    _tool(
         "slack.search_messages",
         "Search Slack channel history (policy-gated; fixture data in demo).",
         {

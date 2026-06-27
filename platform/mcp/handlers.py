@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import uuid
 from typing import Any
 
 from fastapi import HTTPException
 
 from agentic_identity.auth import resolve_delegation_token
-from dolt_store import append_session_event, list_access_requests, list_grants
+from dolt_store import append_session_event, consume_grant, list_access_requests, list_grants
 from gateway_service import (
     list_policy_decisions,
     run_authorize,
@@ -16,9 +15,15 @@ from gateway_service import (
 )
 from mcp.protocol import MCP_AUTH_REQUIRED, MCP_POLICY_DENIED, tool_result_text
 from mcp.registry import DOWNSTREAM_TOOL_NAMES
-from mcp.safe_views import explain_denial, redact_decision_rows, redact_text
+from mcp.safe_views import explain_denial, redact_decision_rows
 from mcp.visibility import visible_tools_from_context
 from person_b.slack_fixtures import search_slack
+from runtime_execution import (
+    RuntimeExecutionError,
+    execute_downstream_tool,
+    tool_intent_for,
+    validate_tool_arguments,
+)
 
 
 class McpHandlerError(Exception):
@@ -63,7 +68,7 @@ def visible_tools_for_session(session_id: str, agent_id: str, authorization: str
     return visible_tools_from_context(
         ctx,
         list_access_requests(session_id),
-        list_grants(session_id),
+        list_grants(session_id, active_only=True),
     )
 
 
@@ -135,12 +140,53 @@ def handle_tool_call(
     if name not in DOWNSTREAM_TOOL_NAMES:
         raise McpHandlerError(MCP_POLICY_DENIED, f"unknown tool: {name}")
 
+    repair = validate_tool_arguments(name, args)
+    if repair:
+        append_session_event(
+            session_id,
+            "tool_call_repair_returned",
+            {
+                "tool_id": name,
+                "missing_arguments": repair["missing_arguments"],
+                "safe_guidance": repair["safe_guidance"],
+            },
+        )
+        return tool_result_text(
+            {
+                **repair,
+                "tool_id": name,
+                "session_id": session_id,
+                "check_state": "repairable",
+            },
+            is_error=True,
+        )
+
     resource_id = _resource_for_tool(name, args)
+    append_session_event(
+        session_id,
+        "tool_call_requested",
+        {
+            "tool_id": name,
+            "resource_id": resource_id,
+            "tool_intent": tool_intent_for(name, args, resource_id),
+        },
+    )
     auth = run_authorize(session_id, agent_id, name, resource_id, claims)
     decision = auth["decision"]
 
     if decision in {"ALLOW", "AUTO_APPROVE_EPHEMERAL_GRANT"}:
-        execution = _mock_execute(name, args, resource_id)
+        try:
+            execution = execute_downstream_tool(
+                tool_id=name,
+                args=args,
+                resource_id=resource_id,
+                authorization=auth,
+                audit_writer=append_session_event,
+                grant_consumer=consume_grant,
+                slack_searcher=search_slack,
+            )
+        except RuntimeExecutionError as e:
+            raise McpHandlerError(MCP_POLICY_DENIED, str(e)) from e
         return tool_result_text(
             {
                 "decision": decision,
@@ -149,6 +195,7 @@ def handle_tool_call(
                 "check_state": auth["check_state"],
                 "proof_id": auth["proof_id"],
                 "grant": auth.get("grant"),
+                "tool_intent": tool_intent_for(name, args, resource_id),
                 "execution": execution,
                 "proof_summary": {
                     "context_path": auth["proof"]["context_path"],
@@ -157,6 +204,17 @@ def handle_tool_call(
             },
         )
 
+    append_session_event(
+        session_id,
+        "denial_returned",
+        {
+            "tool_id": name,
+            "resource_id": resource_id,
+            "decision": decision,
+            "decision_id": auth["decision_id"],
+            "proof_id": auth["proof_id"],
+        },
+    )
     return tool_result_text(
         {
             "error": "scope_required" if decision == "ESCALATE_HUMAN" else "policy_denied",
@@ -167,6 +225,7 @@ def handle_tool_call(
             "check_state": auth["check_state"],
             "proof_id": auth["proof_id"],
             "access_request": auth.get("access_request"),
+            "tool_intent": tool_intent_for(name, args, resource_id),
             "proof_summary": {
                 "context_path": auth["proof"]["context_path"],
                 "rules": auth["proof"]["rules"],
@@ -186,30 +245,3 @@ def _resource_for_tool(tool_id: str, args: dict[str, Any]) -> str:
     if not resource_id:
         raise McpHandlerError(MCP_POLICY_DENIED, "resource_id required")
     return resource_id
-
-
-def _mock_execute(tool_id: str, args: dict[str, Any], resource_id: str) -> dict[str, Any]:
-    if tool_id == "linear.create_issue":
-        return {
-            "issue_id": f"LIN-{uuid.uuid4().hex[:8]}",
-            "team": resource_id,
-            "title": args.get("title", ""),
-            "status": "created",
-            "mode": "mock",
-        }
-    if tool_id == "slack.search_messages":
-        payload = search_slack(resource_id)
-        return {
-            "channel": resource_id,
-            "messages": payload.get("messages", []),
-            "prompt_injection_detected": bool(payload.get("prompt_injection")),
-            "mode": "fixture",
-        }
-    if tool_id == "slack.post_message":
-        return {
-            "channel": resource_id,
-            "text": redact_text(args.get("text", "")),
-            "status": "posted",
-            "mode": "mock",
-        }
-    raise McpHandlerError(MCP_POLICY_DENIED, f"no executor for {tool_id}")

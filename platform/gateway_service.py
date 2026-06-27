@@ -10,6 +10,7 @@ from dolt_store import (
     append_session_event,
     create_ephemeral_grant,
     create_or_update_access_request,
+    find_active_grant,
     get_session,
     list_access_requests,
     list_grants,
@@ -47,7 +48,17 @@ def run_preflight(session_id: str, agent_id: str, jwt_claims: dict[str, Any]) ->
     ctx = preflight_context(session_id)
     recipe_hits, retrieval_engine = recipe_hits_for_session(session, session_id)
     access_requests = list_access_requests(session_id)
-    grants = list_grants(session_id)
+    grants = list_grants(session_id, active_only=True)
+    preflight_event = append_session_event(
+        session_id,
+        "preflight_requested",
+        {
+            "agent_id": agent_id,
+            "predicted_tools": ctx.get("predicted_tools", []),
+            "predicted_scopes": ctx.get("predicted_scopes", []),
+            "recipe_retrieval": retrieval_engine,
+        },
+    )
     identity = {
         "identity_ref": agent["identity_ref"],
         "trust_score": agent["trust_score"],
@@ -80,6 +91,11 @@ def run_preflight(session_id: str, agent_id: str, jwt_claims: dict[str, Any]) ->
             req for req in access_requests if req.get("status") == "pending"
         ],
         "approved_grants": grants,
+        "audit_event": {
+            "event_id": preflight_event["event_id"],
+            "event_hash": preflight_event["event_hash"],
+            "prev_event_hash": preflight_event["prev_event_hash"],
+        },
         **ctx,
     }
 
@@ -104,6 +120,15 @@ def run_authorize(
         raise ValueError(ctx["error"])
 
     idempotency_key = _idempotency_key(ctx)
+    append_session_event(
+        session_id,
+        "authorization_check_requested",
+        {
+            "tool_id": tool_id,
+            "resource_id": resource_id,
+            "idempotency_key": idempotency_key,
+        },
+    )
     check = AUTHZ_CHECKS.evaluate(context=ctx, idempotency_key=idempotency_key)
     policy_decision = AUTHZ_CHECKS.decision_for(check.check_id)
     if policy_decision is None:
@@ -154,6 +179,8 @@ def run_authorize(
             ttl_seconds=900,
             call_count_remaining=1,
         )
+    elif policy_decision.decision == Decision.ALLOW:
+        grant = find_active_grant(session_id, policy_decision.required_scope, resource_id)
 
     event = append_session_event(
         session_id,

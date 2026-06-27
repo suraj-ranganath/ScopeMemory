@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from mcp.registry import AUTH_TOOL_NAMES  # noqa: E402
+from mcp.registry import AUTH_TOOL_NAMES, DOWNSTREAM_TOOL_NAMES  # noqa: E402
 from mcp.safe_views import explain_denial, redact_text  # noqa: E402
 from mcp.visibility import visible_tools_from_context  # noqa: E402
 
@@ -17,6 +17,11 @@ class McpGatewaySurfaceTests(unittest.TestCase):
         self.assertIn("auth.request_scope", AUTH_TOOL_NAMES)
         self.assertIn("auth.explain_denial", AUTH_TOOL_NAMES)
         self.assertIn("auth.submit_workflow_feedback", AUTH_TOOL_NAMES)
+
+    def test_downstream_catalog_includes_mock_linear_wrapper_surface(self) -> None:
+        self.assertIn("linear.create_issue", DOWNSTREAM_TOOL_NAMES)
+        self.assertIn("linear.search_issues", DOWNSTREAM_TOOL_NAMES)
+        self.assertIn("linear.add_comment", DOWNSTREAM_TOOL_NAMES)
 
     def test_visible_tools_are_predicted_or_auth_tools_only(self) -> None:
         visible = visible_tools_from_context({"predicted_tools": ["linear.create_issue"]})

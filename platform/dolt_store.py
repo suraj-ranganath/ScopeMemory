@@ -12,6 +12,7 @@ import pymysql
 from pymysql.cursors import DictCursor
 
 from config import DOLT_DATABASE, DOLT_HOST, DOLT_PASSWORD, DOLT_PORT, DOLT_USER
+from grant_lifecycle import grant_row_is_active
 
 SCHEMA_PATH = Path(__file__).parent / "dolt" / "schema.sql"
 
@@ -153,13 +154,24 @@ def seed_demo() -> None:
         "INSERT INTO tool_scopes VALUES (%s, %s, %s)",
         [
             ("linear.create_issue", "linear:issues:create", "write"),
+            ("linear.search_issues", "linear:issues:read", "read"),
+            ("linear.add_comment", "linear:comments:create", "write"),
             ("slack.search_messages", "slack:channels:history", "read"),
             ("slack.post_message", "slack:chat:write", "write"),
         ],
     )
     cur.execute(
-        "INSERT INTO grants VALUES (%s, %s, %s, %s)",
-        ("grant_linear_001", "sess_demo_001", "linear:issues:create", "linear_team:SALES"),
+        """
+        INSERT INTO grants
+        (grant_id, session_id, scope, resource_id, issuer, proof_id, reason,
+         ttl_seconds, call_count_remaining, expires_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, TIMESTAMPADD(SECOND, %s, NOW()))
+        """,
+        (
+            "grant_linear_001", "sess_demo_001", "linear:issues:create", "linear_team:SALES",
+            "seed", "fixture-proof", "Seeded grant for Linear issue creation",
+            3600, 5, 3600,
+        ),
     )
 
     cur.execute(
@@ -443,8 +455,9 @@ def approve_access_request(request_id: str, approver_id: str) -> dict[str, Any]:
         cur.execute(
             """
             INSERT INTO grants
-            (grant_id, session_id, scope, resource_id, issuer, proof_id, reason)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            (grant_id, session_id, scope, resource_id, issuer, proof_id, reason,
+             ttl_seconds, call_count_remaining, expires_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, 900, 1, TIMESTAMPADD(SECOND, 900, NOW()))
             """,
             (
                 grant_id, req["session_id"], req["requested_scope"], req["requested_resource"],
@@ -484,7 +497,7 @@ def list_access_requests(session_id: str | None = None) -> list[dict[str, Any]]:
     return rows
 
 
-def list_grants(session_id: str | None = None) -> list[dict[str, Any]]:
+def list_grants(session_id: str | None = None, active_only: bool = False) -> list[dict[str, Any]]:
     conn = connect()
     with conn.cursor() as cur:
         if session_id:
@@ -493,7 +506,71 @@ def list_grants(session_id: str | None = None) -> list[dict[str, Any]]:
             cur.execute("SELECT * FROM grants")
         rows = list(cur.fetchall())
     conn.close()
+    if active_only:
+        return [row for row in rows if grant_row_is_active(row)]
     return rows
+
+
+def find_active_grant(session_id: str, scope: str, resource_id: str) -> dict[str, Any] | None:
+    conn = connect()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT * FROM grants
+            WHERE session_id = %s
+              AND scope = %s
+              AND resource_id = %s
+            ORDER BY expires_at DESC
+            """,
+            (session_id, scope, resource_id),
+        )
+        rows = list(cur.fetchall())
+    conn.close()
+    for row in rows:
+        if grant_row_is_active(row):
+            return row
+    return None
+
+
+def consume_grant(grant_id: str, session_id: str, proof_id: str = "") -> dict[str, Any]:
+    failure: dict[str, Any] | None = None
+    grant: dict[str, Any] | None = None
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM grants WHERE grant_id = %s", (grant_id,))
+            grant = cur.fetchone()
+            if not grant or not grant_row_is_active(grant):
+                failure = {
+                    "grant_id": grant_id,
+                    "event_type": "grant_consume_failed",
+                    "reason": "grant missing, expired, or exhausted",
+                }
+            else:
+                cur.execute(
+                    """
+                    UPDATE grants
+                    SET call_count_remaining = GREATEST(call_count_remaining - 1, 0)
+                    WHERE grant_id = %s
+                    """,
+                    (grant_id,),
+                )
+    finally:
+        conn.close()
+
+    if failure:
+        return failure
+    assert grant is not None
+    return append_session_event(
+        session_id,
+        "grant_consumed",
+        {
+            "grant_id": grant_id,
+            "scope": grant["scope"],
+            "resource_id": grant["resource_id"],
+            "proof_id": proof_id or grant.get("proof_id") or "",
+        },
+    )
 
 
 def append_session_event(session_id: str, event_type: str, body: dict[str, Any]) -> dict[str, Any]:

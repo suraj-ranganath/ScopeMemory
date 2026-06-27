@@ -1,0 +1,154 @@
+{
+  "contract_version": "scopememory.policy.v0",
+  "fixture_id": "person_a_runtime_handoff_v1",
+  "generated_from": "codex/no-qdrant-runtime-rest",
+  "generated_at": "2026-06-27T23:00:00Z",
+  "secret_policy": {
+    "secret_exposed_to_agent": false,
+    "contains_plaintext_secret": false,
+    "credential_values": "never included; only opaque lease and hashed reference metadata appear"
+  },
+  "scenarios": [
+    {
+      "scenario": "preflight_goal_sales_renewal",
+      "source_test": "platform/test_mcp_gateway.py::McpGatewaySurfaceTests.test_visible_tools_are_predicted_or_auth_tools_only",
+      "output": {
+        "session_id": "sess_demo_001",
+        "recipe_hits": [
+          {
+            "recipe_id": "recipe_sales_renewal_v3",
+            "score": 1.0,
+            "dolt_commit": "main",
+            "recipe_index_commit": "memgraph-fixture"
+          }
+        ],
+        "visible_tools": [
+          "auth.preflight_goal",
+          "auth.request_scope",
+          "auth.show_decision_proof",
+          "auth.explain_denial",
+          "auth.submit_workflow_feedback",
+          "linear.create_issue",
+          "slack.search_messages"
+        ],
+        "human_required_requests": [
+          {
+            "request_id": "req_slack_history_001",
+            "requested_tool_id": "slack.search_messages",
+            "requested_scope": "slack:channels:history",
+            "requested_resource": "slack_channel:sales-acme",
+            "status": "pending"
+          }
+        ]
+      }
+    },
+    {
+      "scenario": "linear_create_issue_allowed",
+      "source_test": "platform/test_runtime_execution.py::RuntimeExecutionTests.test_linear_create_consumes_grant_and_records_audit",
+      "output": {
+        "decision": "ALLOW",
+        "check_state": "approved",
+        "tool_intent": {
+          "session_id": "sess_demo_001",
+          "tool_id": "linear.create_issue",
+          "resource_id": "linear_team:SALES",
+          "access_kind": "write"
+        },
+        "grant": {
+          "grant_id": "grant_linear_001",
+          "scope": "linear:issues:create",
+          "resource_id": "linear_team:SALES",
+          "issuer": "seed",
+          "call_count_remaining": 5
+        },
+        "execution": {
+          "issue_id": "LIN-demo-renewal",
+          "team": "linear_team:SALES",
+          "title": "Acme renewal follow-up",
+          "status": "created",
+          "mode": "mock"
+        }
+      }
+    },
+    {
+      "scenario": "slack_search_requires_human",
+      "source_test": "platform/test_authorization_checks.py::AuthorizationCheckServiceTests.test_human_escalation_is_pending_and_not_executable",
+      "output": {
+        "decision": "ESCALATE_HUMAN",
+        "check_state": "waiting_for_human",
+        "access_request": {
+          "requested_tool_id": "slack.search_messages",
+          "requested_scope": "slack:channels:history",
+          "requested_resource": "slack_channel:sales-acme",
+          "status": "pending",
+          "proof_id": "sha256:proof-fixture"
+        }
+      }
+    },
+    {
+      "scenario": "slack_external_post_denied",
+      "source_test": "platform/tests/test_cozo_policy.py::PolicyAgentTests.test_external_post_is_hard_denied_over_default_deny",
+      "output": {
+        "decision": "DENY",
+        "check_state": "denied",
+        "reason": "external write not predicted as safe",
+        "proof_summary": {
+          "rules": ["deny_external_write"],
+          "context_path": [
+            "sess_demo_001",
+            "recipe_sales_renewal_v3",
+            "slack.post_message",
+            "slack:chat:write",
+            "slack_channel:external-partners"
+          ]
+        }
+      }
+    },
+    {
+      "scenario": "repair_missing_linear_title",
+      "source_test": "platform/test_runtime_execution.py::RuntimeExecutionTests.test_repairable_argument_validation_returns_safe_guidance",
+      "output": {
+        "decision": "REPAIR",
+        "check_state": "repairable",
+        "missing_arguments": ["title"],
+        "safe_guidance": "Provide required argument(s): title"
+      }
+    },
+    {
+      "scenario": "opaque_credential_lease_metadata",
+      "source_test": "platform/test_credential_hooks.py::CredentialBrokerTests.test_broker_mints_opaque_gateway_lease_with_ready_service_account_mode",
+      "output": {
+        "lease_id": "lease_fixture",
+        "credential_ref_hash": "sha256:credential-ref-fixture",
+        "provider": "onepassword",
+        "provider_mode": "onepassword_sdk_service_account",
+        "injection_mode": "gateway_header",
+        "max_uses": 1,
+        "secret_exposed_to_agent": false
+      }
+    },
+    {
+      "scenario": "audit_hash_chain",
+      "source_test": "platform/test_runtime_execution.py::RuntimeExecutionTests.test_linear_create_consumes_grant_and_records_audit",
+      "output": {
+        "events": [
+          {
+            "event_type": "tool_call_requested",
+            "prev_event_hash": "sha256:previous",
+            "event_hash": "sha256:tool-call"
+          },
+          {
+            "event_type": "policy_decision",
+            "prev_event_hash": "sha256:tool-call",
+            "event_hash": "sha256:policy-decision"
+          },
+          {
+            "event_type": "downstream_call_executed",
+            "prev_event_hash": "sha256:policy-decision",
+            "event_hash": "sha256:downstream-call"
+          }
+        ]
+      }
+    }
+  ]
+}
