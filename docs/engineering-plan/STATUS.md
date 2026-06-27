@@ -2,71 +2,40 @@
 
 ## Current Phase
 
-Plan package ready for implementation planning. Owner gates from the initial review are resolved.
+**RFC-07 — 2-hour Agentic Identity demo.** Runnable scaffold in `demo/`.
 
 ## Route
 
-`HIGH_END`
+`DEMO_FIRST` — simplified from `HIGH_END` planning phase.
 
-Reason: the task is an architecture/RFC synthesis across authorization, credentials, secret handling, MCP runtime enforcement, auditability, policy proof, and product workflow. The blast radius is security-sensitive even though no product code has been written.
-
-SR Code route decision:
-
-```json
-{
-  "tier": "HIGH_END",
-  "model": "openai/gpt-5.5",
-  "scores": {"A1":3,"A2":3,"A3":3,"A4":3,"A5":2,"A6":3,"A7":3},
-  "sum": 20,
-  "hard_trigger": "RFC / architecture authoring with security/auth surface",
-  "band": "high-end-floor",
-  "bulk_cap": false,
-  "blocked": false,
-  "decided_by": "base",
-  "rationale": "Open architecture synthesis for a security/auth system with credential handling and no purely objective verifier.",
-  "scout": false
-}
-```
-
-## Orchestration
-
-SR Code package: `/Users/suraj.ranganath/Desktop/sr-code/plans/scopememory`.
-
-Pool preflight found the SR Code arenas and required templates, but no live base members were running:
-
-- `arbiter-1`, `arbiter-2` missing.
-- `sqfan-engineer-1`, `sqfan-engineer-2` missing.
-- `c1-engineer-1`, `c1-engineer-2` missing.
-- `drafter-1`, `drafter-2` missing.
-
-No `reconcile --go` was run because that mutates Squire state and the requested deliverable is planning only. The planning package was therefore produced as a local SR-style research, judge, synthesis, and reduction pass.
+Reason: full RFC-00 through RFC-06 cannot be built correctly in 2 hours. RFC-07 defines a binding subset with working code.
 
 ## Verification
 
 Completed:
 
-- Read `INITIAL_ROUGH_PLAN.md`.
-- Read SR Code instructions, routing, planning, research, judge, synthesis, orchestration, and quality-bar playbooks.
-- Read the pqprime C1 Device-ID exemplar package shape.
-- Created and claimed Beads issue `ScopeMemory-9sk`.
-- Built a split plan package with source-grounded research, judges, decisions, and ground-truth ledger.
-
-Completed owner decisions:
-
-- v1 zero knowledge means zero secret exposure to agents and ScopeMemory persistence.
-- MVP credential provider is real 1Password.
-- Slack is mocked for the demo.
-- Policy engine starts with CozoDB.
-- Local SR-style planning is sufficient; no live pooled arbiter pass is required before implementation.
+- Full engineering plan package (RFC-00 through RFC-06)
+- RFC-07 2-hour demo spec
+- Runnable demo: `demo/schema.sql`, `demo/rebac.py`, `demo/run_demo.py`
 
 Pending:
 
-- Implementation authorization.
+- Run `python demo/run_demo.py all` on target machine
+- Phase 2 implementation authorization
 
-## Non-Goals For This Phase
+## What Changed
 
-- No product code.
-- No Docker Compose.
-- No API server.
-- No MCP server implementation.
-- No Git commit or push unless separately requested.
+| Before | After |
+|--------|-------|
+| 40-hour MVP as first build | 2-hour SQLite ReBAC demo first |
+| 24 Dolt tables required day 1 | 11 SQLite tables in `demo/` |
+| CozoDB + 1Password + Qdrant + MCP | Deferred to RFC-06 Phase 2 |
+| 7 UI screens | Terminal JSON proof output |
+
+## Next Step
+
+```bash
+cd demo && python run_demo.py all
+```
+
+Then extend per RFC-06 Phase 2 work packages.

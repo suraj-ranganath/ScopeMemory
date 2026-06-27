@@ -2,7 +2,27 @@
 
 ## Status
 
-Plan ready for implementation authorization.
+**First build:** RFC-07 demo schema (11 SQLite tables in `demo/schema.sql`).  
+**This document:** full Phase 2 domain model (24 Dolt tables).
+
+## Demo Data Model (RFC-07 binding)
+
+Build only these tables for the 2-hour demo. Full definitions in `demo/schema.sql`.
+
+| Table | ReBAC role |
+|-------|------------|
+| `users`, `teams`, `user_teams` | `member_of` |
+| `agents` | Agentic-IAM identity mirror (`identity_ref`, `trust_score`) |
+| `sessions` | Bounded run + `goal_class` |
+| `delegations` | `user#delegates@agent@session` |
+| `workflow_recipes`, `recipe_tools`, `recipe_scopes` | Memory + `predicts_*` |
+| `resources` | `owned_by` + `external` flag |
+| `grants` | Ephemeral session grants |
+| `tool_scopes` | Tool → scope mapping (demo shortcut) |
+
+Recipe match in demo: **exact `goal_class` equality** (no Qdrant).
+
+Promotion to full RFC-01: swap SQLite → Dolt, add graph snapshot tables, credential tables, audit chain.
 
 ## Core Domain Terms
 

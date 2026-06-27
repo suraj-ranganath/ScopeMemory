@@ -2,7 +2,24 @@
 
 ## Status
 
-Plan ready for implementation authorization.
+**First build:** RFC-07 (2-hour Agentic Identity demo).  
+**This document:** target architecture for Phase 2 full MVP.
+
+## Demo Scope (RFC-07 — build this first)
+
+For the 2-hour Agentic Identity demo, implement only:
+
+```text
+Agentic-IAM identity mirror (agents.identity_ref)
+  → user delegates agent for session
+  → recipe matches goal_class
+  → ReBAC context_path check
+  → ALLOW | DENY | ESCALATE_HUMAN + proof JSON
+```
+
+Implementation: `demo/` directory, SQLite, Python CLI. No MCP gateway, no Dolt, no Qdrant.
+
+See [RFC-07](RFC-07-2-hour-agentic-identity-demo.md).
 
 ## Product Claim
 

@@ -2,7 +2,23 @@
 
 ## Status
 
-Plan ready for implementation authorization.
+**First build:** RFC-07 demo policy in `demo/rebac.py` (3 rules, Python).  
+**This document:** Phase 2 CozoDB policy engine.
+
+## Demo Policy (RFC-07 binding)
+
+Implement only these checks in `demo/rebac.py`:
+
+1. **DENY** if no `delegations` row for `(session, user, agent)`
+2. **DENY** if recipe does not `predicts_tool` OR resource `team_id` ≠ session team
+3. **DENY** if `resource.external = 1` and tool `access_kind = write`
+4. **ALLOW** if `grants` row exists for `(session, scope, resource)`
+5. **ALLOW** if recipe scope `approval_mode = auto_approve` and checks 1–3 pass
+6. **ESCALATE_HUMAN** if recipe scope `approval_mode = human_required` and no grant
+
+Output every decision with `context_path` and `rebac_tuples`.
+
+Phase 2 promotes these rules to CozoDB Datalog with graph facts from RFC-02 below.
 
 ## Policy Contract
 

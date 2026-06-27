@@ -1,0 +1,49 @@
+services:
+  dolt:
+    image: dolthub/dolt-sql-server:latest
+    ports:
+      - "3306:3306"
+    environment:
+      DOLT_ROOT_PATH: /var/lib/dolt
+    volumes:
+      - dolt_data:/var/lib/dolt
+      - ./dolt/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "dolt sql -q 'SELECT 1' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 15s
+
+  gateway:
+    profiles: ["gateway-docker"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      DOLT_HOST: dolt
+      DOLT_PORT: "3306"
+      DOLT_USER: scope
+      DOLT_PASSWORD: ""
+      DOLT_DATABASE: scopememory
+      MEMGRAPH_URI: bolt://memgraph:7687
+      GRAPH_FALLBACK: auto
+    depends_on:
+      dolt:
+        condition: service_healthy
+
+  memgraph:
+    profiles: ["memgraph"]
+    image: memgraph/memgraph:latest
+    ports:
+      - "7687:7687"
+      - "7444:7444"
+    command: ["--log-level=WARNING"]
+    volumes:
+      - memgraph_data:/var/lib/memgraph
+
+volumes:
+  dolt_data:
+  memgraph_data:

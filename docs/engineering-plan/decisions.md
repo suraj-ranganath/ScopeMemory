@@ -42,10 +42,16 @@
 **Decision:** The first build proves one end-to-end lifecycle: preflight, access request, credential lease, gateway enforcement, audit proof, prompt-injection denial, recipe proposal, Dolt diff, and Qdrant refresh. It uses two downstream services: Linear and Slack or Slack-mock.
 **Reason:** Building every integration, every secret provider, and a formal proof engine would obscure the product thesis. The MVP must show the whole control loop with a small number of surfaces.
 **Affected:** RFC-06.
-**Status:** active
+**Status:** superseded by D-SCM-009 for first build; reactivated for Phase 2
 
 ### D-SCM-007 - 2026-06-27 - Owner Locks MVP Planning Choices
 **Decision:** The owner approved the v1 zero-knowledge definition as "zero secret exposure to agents and ScopeMemory persistence"; selected real 1Password for the MVP credential provider; selected mocked Slack for the demo attack/customer-context path; selected CozoDB as the initial policy engine; and accepted the local SR-style planning pass without a live pooled arbiter run.
 **Reason:** These choices remove the remaining owner gates from the planning package and make the implementation path crisp: build the real credential-broker path, keep Slack safe and deterministic, make the policy layer concretely Datalog-like with CozoDB, and proceed without waiting on Squire pool reconciliation.
 **Affected:** README, STATUS, drive, open-questions, RFC-02, RFC-04, RFC-06, judges, ground-truth-ledger.
+**Status:** active — Phase 2 only; RFC-07 demo defers 1Password and CozoDB
+
+### D-SCM-009 - 2026-06-27 - Demo First With RFC-07 Two-Hour Scope
+**Decision:** The first implementation is RFC-07 only: SQLite + Python ReBAC demo proving Agentic Identity delegation, recipe memory, context_path proofs, ALLOW/DENY/ESCALATE. Full RFC-06 MVP (Dolt, Qdrant, CozoDB, 1Password, MCP gateway, UI) is Phase 2 and must not block the demo.
+**Reason:** Prior plan overshot feasible demo time. RFC-07 delivers a correct, runnable Agentic Identity story in 2 hours.
+**Affected:** RFC-00, RFC-01, RFC-02, RFC-06, RFC-07, STATUS, README, demo/.
 **Status:** active
