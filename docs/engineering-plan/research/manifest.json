@@ -1,0 +1,31 @@
+{
+  "slug": "scopememory",
+  "task": "Source-grounded engineering plan/spec for ScopeMemory, including zero-knowledge credential injection through password managers and pre-tool-use hooks.",
+  "date": "2026-06-27",
+  "sources_read": [
+    "/Users/suraj.ranganath/Documents/ScopeMemory/README.md",
+    "/Users/suraj.ranganath/Documents/ScopeMemory/INITIAL_ROUGH_PLAN.md",
+    "/Users/suraj.ranganath/Desktop/sr-code/AGENTS.md",
+    "/Users/suraj.ranganath/Desktop/sr-code/.claude/skills/sr-route/SKILL.md",
+    "/Users/suraj.ranganath/Desktop/sr-code/.claude/skills/sr-planning-pipeline/SKILL.md",
+    "/Users/suraj.ranganath/Desktop/sr-code/.claude/skills/sr-planning-orchestration/SKILL.md",
+    "/Users/suraj.ranganath/Desktop/sr-code/playbooks/planning-loop.md",
+    "/Users/suraj.ranganath/Desktop/sr-code/playbooks/pqprime-quality-bar.md",
+    "/Users/suraj.ranganath/Desktop/sr-code/playbooks/research-grounding.md",
+    "/Users/suraj.ranganath/Desktop/sr-code/playbooks/plan-package.md",
+    "/Users/suraj.ranganath/Desktop/sr-code/third_party/pqprime/examples/c1-device-id/rfc/README.md",
+    "https://modelcontextprotocol.io/specification/2025-11-25/server/tools",
+    "https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization",
+    "https://docs.anthropic.com/en/docs/claude-code/hooks",
+    "https://www.1password.dev/cli/secret-references",
+    "https://www.1password.dev/"
+  ],
+  "files": {
+    "report.md": "Executive research summary.",
+    "source-grounding.md": "Local repo and rough-plan facts.",
+    "external-standards.md": "External standards and product docs.",
+    "zero-knowledge-credential-injection.md": "Password manager and hook integration analysis.",
+    "threat-model.md": "Threat model and abuse cases.",
+    "scope-reduction-report/report.md": "Harsh reduction pass for the MVP line."
+  }
+}

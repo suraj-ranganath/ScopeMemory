@@ -1,0 +1,2 @@
+{"id":"int-539e0ab4","kind":"field_change","created_at":"2026-06-27T20:15:26.159775Z","actor":"suraj-ranganath","issue_id":"ScopeMemory-9sk","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Completed planning package"}}
+{"id":"int-7cf711e9","kind":"field_change","created_at":"2026-06-27T20:28:55.970931Z","actor":"suraj-ranganath","issue_id":"ScopeMemory-746","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Recorded owner planning decisions"}}
