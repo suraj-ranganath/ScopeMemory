@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "ScopeMemory",
+  "project_id": "68c39000-453d-43dc-94a2-f920b78c51cb"
+}
