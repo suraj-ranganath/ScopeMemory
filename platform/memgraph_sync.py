@@ -92,9 +92,29 @@ def sync_to_memgraph() -> int:
             session.run(
                 """
                 MATCH (s:Session {id: $sid}), (r:Recipe {goal_class: $gc, team_id: $tid, status: 'accepted'})
-                MERGE (s)-[:MATCHES {source: 'dolt'}]->(r)
+                MERGE (s)-[m:MATCHES {source: 'dolt_goal_match'}]->(r)
+                SET m.score = 0.89, m.reified = true
                 """,
                 sid=row["session_id"], gc=row["goal_class"], tid=row["team_id"],
+            )
+        for row in data.get("session_recipe_similarity", []):
+            session.run(
+                """
+                MATCH (s:Session {id: $sid}), (r:Recipe {id: $rid})
+                MERGE (s)-[m:MATCHES {source: 'session_recipe_similarity'}]->(r)
+                SET m.score = $score,
+                    m.rank_order = $rank_order,
+                    m.reified = $reified,
+                    m.dolt_commit_hash = $dolt_commit_hash,
+                    m.qdrant_index_commit = $qdrant_index_commit
+                """,
+                sid=row["session_id"],
+                rid=row["recipe_id"],
+                score=float(row["score"]),
+                rank_order=int(row["rank_order"]),
+                reified=bool(row["reified"]),
+                dolt_commit_hash=row["dolt_commit_hash"],
+                qdrant_index_commit=row["qdrant_index_commit"],
             )
         for row in data["recipe_tools"]:
             session.run(

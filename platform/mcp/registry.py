@@ -44,6 +44,30 @@ AUTH_TOOLS: list[dict[str, Any]] = [
         {**SESSION_ARGS},
         ["session_id", "agent_id"],
     ),
+    _tool(
+        "auth.request_scope",
+        "Request authorization for a tool/resource pair without executing the downstream tool.",
+        {
+            **SESSION_ARGS,
+            "tool_id": {"type": "string", "description": "Downstream tool to authorize"},
+            **RESOURCE_ARG,
+            "channel": {
+                "type": "string",
+                "description": "Slack channel resource id when requesting slack.search_messages",
+            },
+            "reason": {"type": "string", "description": "User-facing reason for the access request"},
+        },
+        ["session_id", "agent_id", "tool_id"],
+    ),
+    _tool(
+        "auth.explain_denial",
+        "Return the latest safe denial or escalation explanation for a session.",
+        {
+            **SESSION_ARGS,
+            "decision_id": {"type": "string", "description": "Optional policy decision id"},
+        },
+        ["session_id", "agent_id"],
+    ),
 ]
 
 DOWNSTREAM_TOOLS: list[dict[str, Any]] = [
