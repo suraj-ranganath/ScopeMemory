@@ -10,10 +10,11 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from agentic_iam import router as iam_router, verify_agent_active
-from cozo_policy import evaluate, export_facts
+from cozo_policy import decide
 from dolt_store import get_session, init_schema, save_policy_decision, seed_demo
 from memgraph_queries import authorize_context, preflight_context
 from memgraph_sync import sync_to_memgraph
+from policy_contracts import contract_dict
 
 
 def _wait_for_dolt(max_attempts: int = 30) -> None:
@@ -113,28 +114,24 @@ def authorize(req: AuthorizeRequest) -> dict[str, Any]:
     if "error" in ctx:
         raise HTTPException(404, ctx["error"])
 
-    decision, reason, rules = evaluate(ctx["facts"])
-    cozo_facts = export_facts(ctx["facts"])
+    policy_decision = decide(ctx)
 
     proof = {
-        "decision": decision,
-        "reason": reason,
+        **contract_dict(policy_decision.proof),
         "context_path": ctx["context_path"],
         "rebac_tuples": ctx["rebac_tuples"],
         "memgraph_facts": ctx["facts"],
-        "cozo_facts": cozo_facts,
-        "rules": rules,
-        "policy_engine": "cozo",
+        "cozo_facts": policy_decision.proof.facts,
     }
 
     decision_id = save_policy_decision(
-        req.session_id, req.tool_id, req.resource_id, decision, proof,
+        req.session_id, req.tool_id, req.resource_id, policy_decision.decision.value, proof,
     )
 
     return {
         "decision_id": decision_id,
-        "decision": decision,
-        "reason": reason,
+        "decision": policy_decision.decision.value,
+        "reason": policy_decision.reason,
         "proof": proof,
         "audit_store": "dolt",
     }
