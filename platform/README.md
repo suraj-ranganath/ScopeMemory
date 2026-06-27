@@ -141,17 +141,26 @@ python3 run_mcp_demo.py
 
 See `mcp/README.md`.
 
-## Streamlit UI
+## React UI
 
-Interactive demo frontend for the full stack (Identity, Auth, Session, MCP):
+Interactive React frontend for the full stack. The UI uses Effect-powered API workflows and talks to the gateway on :8080.
 
 ```bash
 docker compose --profile gateway-docker up -d --build
 ./run_ui.sh
-# or: streamlit run streamlit_app.py
 ```
 
-Opens at http://localhost:8501 — connects to gateway on :8080.
+Opens at http://localhost:5173 — connects to gateway on :8080.
+
+For production-style serving through the gateway, build the web app:
+
+```bash
+cd web
+npm install
+npm run build
+```
+
+Then open http://127.0.0.1:8080/. The Docker image builds this React bundle automatically.
 
 See `person_b/README.md` for contracts, fixtures, and demo paths.
 

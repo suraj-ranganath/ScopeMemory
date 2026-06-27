@@ -28,6 +28,8 @@ from graph_backend import backend_name, sync_graph
 from mcp.router import router as mcp_router
 
 WEB_DIR = Path(__file__).parent / "web"
+WEB_DIST_DIR = WEB_DIR / "dist"
+WEB_ASSETS_DIR = WEB_DIST_DIR / "assets"
 FIXTURES_DIR = Path(__file__).parent / "person_b" / "fixtures"
 
 
@@ -68,7 +70,10 @@ app = FastAPI(title="ScopeMemory Gateway", lifespan=lifespan)
 app.include_router(iam_router)
 app.include_router(mock_router)
 app.include_router(mcp_router)
-app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
+if WEB_ASSETS_DIR.exists():
+    app.mount("/assets", StaticFiles(directory=str(WEB_ASSETS_DIR)), name="assets")
+else:
+    app.mount("/src", StaticFiles(directory=str(WEB_DIR / "src")), name="react-src")
 
 
 def _recipe_hits_for_session(session: dict[str, Any], session_id: str) -> tuple[list[dict[str, Any]], str]:
@@ -105,7 +110,10 @@ def health() -> dict[str, str]:
 
 @app.get("/")
 def demo_ui() -> FileResponse:
-    return FileResponse(WEB_DIR / "index.html")
+    index_path = WEB_DIST_DIR / "index.html"
+    if not index_path.exists():
+        index_path = WEB_DIR / "index.html"
+    return FileResponse(index_path)
 
 
 @app.post("/auth/preflight")
