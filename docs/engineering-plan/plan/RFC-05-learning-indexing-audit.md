@@ -12,11 +12,13 @@ ScopeMemory learns authorization recipes from repeated successful sessions. It d
 session completes
   -> session events and outcomes are summarized
   -> recipe proposal judge emits candidate recipe facts
+  -> evidence_from edges link proposal to source sessions
   -> proposal branch is created in Dolt
   -> human/security review accepts, edits, or rejects
   -> accepted recipe lands on Dolt main
+  -> graph_nodes/graph_edges updated for recipe lineage
   -> indexer derives Qdrant recipe chunks
-  -> future preflights can retrieve the accepted recipe
+  -> future preflights can retrieve the accepted recipe and reify similar_to edges
 ```
 
 ## Recipe Proposal Judge

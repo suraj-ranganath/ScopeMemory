@@ -14,6 +14,9 @@ TribalAuth / ScopeMemory / AgentAuthOS
 Dolt
   canonical, branchable source of truth for recipes, grants, approvals, policies, audit events
 
+Memory Data Context Graph
+  typed graph of users, teams, goals, recipes, tools, scopes, resources, sessions, and proofs
+
 Qdrant
   fast semantic/hybrid search over approved workflow authorization recipes
 
@@ -129,11 +132,13 @@ Do not make Qdrant the source of truth. Do not make the LLM judge the authority.
 │                                                                      │
 │  1. Validate MCP tool schema                                          │
 │  2. Normalize tool intent                                             │
-│  3. Retrieve similar Workflow Authorization Recipes                   │
-│  4. Convert static + dynamic context into Datalog facts               │
-│  5. Decide: allow / deny / auto-approve / human-escalate              │
-│  6. Mint or attach downstream credentials invisibly                   │
-│  7. Execute Slack/Linear/GitHub call                                  │
+│  3. Build session context subgraph (Memory Data Context Graph)        │
+│  4. Retrieve similar recipes via semantic edges + graph traversal       │
+│  5. Project subgraph → Datalog facts                                  │
+│  6. Decide: allow / deny / auto-approve / human-escalate              │
+│  7. Mint or attach downstream credentials invisibly                   │
+│  8. Execute Slack/Linear/GitHub call                                  │
+│  9. Append new graph nodes/edges (call, grant, audit)                 │
 └──────────────────────────────┬───────────────────────────────────────┘
                                │
         ┌──────────────────────┼──────────────────────┐
@@ -148,7 +153,7 @@ Do not make Qdrant the source of truth. Do not make the LLM judge the authority.
 │ Review UI                                                            │
 │ - predicted scopes                                                   │
 │ - access requests                                                    │
-│ - proof tree                                                         │
+│ - context graph + proof tree                                         │
 │ - Dolt diff for newly proposed recipes                               │
 │ - session audit timeline                                             │
 └──────────────────────────────────────────────────────────────────────┘
@@ -161,9 +166,274 @@ Qdrant is the right retrieval layer because it stores vectors with JSON payloads
 
 Dolt has improving vector support, but I would not put your production retrieval path there yet. DoltHub’s own vector performance update says vector index builds improved a lot, but vector index lookups were still slower than MariaDB at the time of that post. ([DoltHub](https://www.dolthub.com/blog/2025-09-03-improving-vector-performance/)) For the hackathon, Dolt should own **governance and auditability**, while Qdrant owns **fast semantic retrieval**.
 
+The missing connective tissue between those stores is a **Memory Data Context Graph**: a typed, queryable graph that links every authorization-memory entity and makes “what context matters for this session?” a first-class question instead of an ad hoc join across tables and vector hits.
+
 ---
 
-# 3. The main primitive: Workflow Authorization Recipe
+# 3. Memory Data Context Graph
+
+ScopeMemory is not just “RAG over recipes.” It is a **memory data context graph** — a governed graph where nodes are authorization-memory entities and edges are typed relationships with provenance, confidence, and time bounds.
+
+The graph answers:
+
+```text
+Given this user, team, session goal, and current grants,
+what recipes, tools, scopes, resources, approvals, and prior sessions
+are in context — and how did we reach that conclusion?
+```
+
+Relational tables in Dolt store the canonical nodes and edges. Qdrant adds **semantic similarity edges** between goals and recipes. The gateway materializes a **session context subgraph** on every preflight and tool call, then projects that subgraph into Datalog facts for deterministic decisions.
+
+## Why a graph, not just tables + vectors
+
+Recipes alone are insufficient. Authorization memory is inherently relational:
+
+```text
+User ──member_of──> Team
+Team ──owns──> Workflow Authorization Recipe
+Recipe ──predicts──> MCP Tool
+Tool ──requires──> Scope
+Scope ──applies_to──> Resource
+Session ──similar_to──> Recipe
+Session ──requested──> Tool
+Session ──granted──> Scope @ Resource
+Session ──evidence_for──> Recipe proposal
+Recipe ──supersedes──> older Recipe
+Approval ──authorizes──> Grant
+Grant ──used_in──> Tool Call
+Tool Call ──produces──> Audit Event
+```
+
+A flat recipe JSON blob hides these traversals. A context graph makes them explicit, auditable, and queryable.
+
+## Node types
+
+| Node kind | Example ID | Role in authorization memory |
+|-----------|------------|------------------------------|
+| `User` | `user_suraj` | Human who owns the session |
+| `Team` | `team_sales` | Organizational boundary for policy |
+| `Agent` | `agent_042` | Runtime identity executing tools |
+| `Session` | `sess_123` | Bounded run with a signed goal |
+| `GoalClass` | `sales_renewal_prep` | Normalized intent category |
+| `Recipe` | `recipe_sales_renewal_prep_v3` | Learned access pattern |
+| `MCPServer` | `mcp_linear` | External integration surface |
+| `MCPTool` | `linear.create_issue` | Callable action with schema |
+| `Scope` | `linear:issues:create` | OAuth/API permission unit |
+| `Resource` | `linear_team:SALES` | Concrete object being accessed |
+| `Grant` | `grant_sess123_linear_create` | Short-lived authorization |
+| `AccessRequest` | `req_884` | Missing-scope escalation object |
+| `Approval` | `appr_221` | Human or policy sign-off |
+| `AuditEvent` | `evt_9912` | Immutable decision/call record |
+| `CredentialRef` | `credref_slack_bot_sales` | Opaque secret pointer |
+| `PolicyRule` | `rule_no_external_slack` | Static org constraint |
+
+## Edge types
+
+| Edge | From → To | Payload |
+|------|-----------|---------|
+| `member_of` | User → Team | role, since |
+| `runs` | User → Session | started_at |
+| `executes` | Agent → Session | agent_version |
+| `has_goal` | Session → GoalClass | raw_goal_text, embedding_ref |
+| `similar_to` | Session → Recipe | cosine_score, rank, index_commit |
+| `predicts_tool` | Recipe → MCPTool | typical_order, required |
+| `predicts_scope` | Recipe → Scope | approval_mode, max_ttl |
+| `requires_scope` | MCPTool → Scope | resource_kind |
+| `targets_resource` | Scope → Resource | constraint_json |
+| `owned_by` | Resource → Team | visibility |
+| `requested` | Session → MCPTool | call_id, schema_hash |
+| `granted` | Session → Scope | resource, ttl, issuer |
+| `authorized_by` | Grant → Approval | approver_type, proof_ref |
+| `evidence_from` | Recipe → Session | evidence_type, score |
+| `supersedes` | Recipe → Recipe | dolt_commit, reason |
+| `invoked` | Session → MCPTool | latency_ms, outcome |
+| `produced` | MCPTool → AuditEvent | decision, fact_set_hash |
+| `bound_to` | MCPTool → CredentialRef | lease_id, never_raw_secret |
+
+Semantic edges (`similar_to`) live in Qdrant payloads but are **reified into Dolt** as `session_recipe_similarity` rows so every decision can cite graph provenance.
+
+## Architecture placement
+
+```text
+                         ┌──────────────────────────────┐
+                         │ Agent Runtime                 │
+                         └──────────────┬───────────────┘
+                                        │
+                                        v
+┌──────────────────────────────────────────────────────────────────────┐
+│                         AgentAuth Gateway                            │
+│                                                                      │
+│  1. Build Session Context Subgraph from goal + grants + history      │
+│  2. Expand subgraph via graph traversal + Qdrant semantic edges      │
+│  3. Project subgraph → Datalog facts                                 │
+│  4. Decide: allow / deny / auto-approve / escalate                   │
+│  5. Append new nodes/edges (call, grant, audit) back to graph          │
+└──────────────────────────────┬───────────────────────────────────────┘
+                               │
+        ┌──────────────────────┼──────────────────────┐
+        v                      v                      v
+┌──────────────┐       ┌────────────────┐      ┌────────────────┐
+│ Dolt          │       │ Qdrant          │      │ Datalog Engine │
+│ nodes + edges │       │ semantic edges  │      │ graph → facts  │
+│ (canonical)   │       │ (derived index) │      │ (decisions)    │
+└──────────────┘       └────────────────┘      └────────────────┘
+```
+
+For the hackathon, you can implement graph traversal with SQL joins over edge tables in Dolt, or use **CozoDB** as a derived graph query layer that syncs from Dolt on commit. Do not make the graph engine the source of truth — Dolt remains canonical.
+
+## Example: sales renewal session subgraph
+
+```mermaid
+graph TD
+  U[user_suraj] -->|member_of| T[team_sales]
+  U -->|runs| S[sess_123]
+  A[agent_042] -->|executes| S
+  S -->|has_goal| G[sales_renewal_prep]
+  S -->|similar_to 0.89| R[recipe_sales_renewal_prep_v3]
+  R -->|predicts_tool| T1[slack.search_messages]
+  R -->|predicts_tool| T2[linear.create_issue]
+  T1 -->|requires_scope| SC1[slack:channels:history]
+  T2 -->|requires_scope| SC2[linear:issues:create]
+  SC2 -->|targets_resource| RES[linear_team:SALES]
+  RES -->|owned_by| T
+  S -->|granted| SC2
+  S -->|requested| T2
+  R -->|evidence_from| S0[sess_101]
+  R -->|evidence_from| S1[sess_204]
+  R -->|supersedes| R0[recipe_sales_renewal_prep_v2]
+```
+
+Preflight traversal for `sess_123`:
+
+```text
+1. Start at Session(sess_123)
+2. Walk member_of → Team(team_sales) for policy boundary
+3. Walk similar_to → Recipe(recipe_sales_renewal_prep_v3) via Qdrant + Dolt reification
+4. Expand predicts_tool / predicts_scope / targets_resource
+5. Compare required scopes against Session → granted edges
+6. Emit missing AccessRequest nodes for gaps
+7. Project full subgraph to Datalog facts
+8. Return narrowed tool catalog = predicted tools minus denied branches
+```
+
+## Context graph query patterns
+
+These are the queries the gateway runs constantly:
+
+```text
+context.recipes_for_session(session_id)
+  Session -[similar_to]-> Recipe
+  WHERE Recipe.status = 'accepted'
+  AND Recipe.team_id = Session.team_id
+  ORDER BY similarity DESC LIMIT 5
+
+context.missing_scopes(session_id, tool_id)
+  Session -[requested]-> Tool -[requires_scope]-> Scope
+  MINUS Session -[granted]-> Scope
+
+context.resource_allowed(session_id, resource_id)
+  Session -[member_of*]-> Team
+  Resource -[owned_by]-> Team
+
+context.proof_chain(session_id, tool_call_id)
+  Session -[invoked]-> Tool -[produced]-> AuditEvent
+  AuditEvent -[derived_from]-> {Grant, Approval, Recipe, PolicyRule}
+
+context.recipe_lineage(recipe_id)
+  Recipe -[supersedes*]-> Recipe
+  Recipe -[evidence_from]-> Session
+```
+
+## Dolt edge tables (graph layer)
+
+Add these tables alongside the core schema in section 8. They are the canonical graph storage:
+
+```sql
+CREATE TABLE graph_nodes (
+  node_id VARCHAR(128) PRIMARY KEY,
+  node_kind VARCHAR(64) NOT NULL,
+  ref_id VARCHAR(128) NOT NULL,
+  dolt_commit_hash VARCHAR(128),
+  created_at DATETIME NOT NULL,
+  UNIQUE (node_kind, ref_id)
+);
+
+CREATE TABLE graph_edges (
+  edge_id VARCHAR(128) PRIMARY KEY,
+  src_node_id VARCHAR(128) NOT NULL,
+  dst_node_id VARCHAR(128) NOT NULL,
+  edge_kind VARCHAR(64) NOT NULL,
+  payload_json JSON,
+  confidence DOUBLE,
+  valid_from DATETIME NOT NULL,
+  valid_until DATETIME,
+  provenance VARCHAR(128), -- dolt, qdrant, gateway, judge
+  created_at DATETIME NOT NULL
+);
+
+CREATE TABLE session_recipe_similarity (
+  session_id VARCHAR(128) NOT NULL,
+  recipe_id VARCHAR(128) NOT NULL,
+  similarity_score DOUBLE NOT NULL,
+  rank INT NOT NULL,
+  qdrant_point_id VARCHAR(128),
+  dolt_commit_hash VARCHAR(128),
+  created_at DATETIME NOT NULL,
+  PRIMARY KEY (session_id, recipe_id)
+);
+
+CREATE TABLE session_context_snapshots (
+  snapshot_id VARCHAR(128) PRIMARY KEY,
+  session_id VARCHAR(128) NOT NULL,
+  phase VARCHAR(32) NOT NULL, -- preflight, tool_call, post_call
+  subgraph_json JSON NOT NULL,
+  fact_set_hash VARCHAR(128) NOT NULL,
+  created_at DATETIME NOT NULL
+);
+```
+
+`snapshot_json` stores the materialized subgraph used for a decision. That is what powers the demo “proof tree” UI: not a black-box LLM rationale, but a visible context graph slice.
+
+## Projecting graph → Datalog facts
+
+Every authorization decision should be reproducible from a graph snapshot:
+
+```prolog
+% Derived from graph traversal, not LLM inference
+graph_edge("sess_123", "similar_to", "recipe_sales_renewal_prep_v3", 0.89).
+graph_edge("recipe_sales_renewal_prep_v3", "predicts_scope", "linear:issues:create", 1.0).
+graph_edge("linear_team:SALES", "owned_by", "team_sales", 1.0).
+graph_edge("sess_123", "granted", "linear:issues:create", 1.0).
+
+context_path("sess_123", "linear.create_issue", [
+  "sess_123",
+  "recipe_sales_renewal_prep_v3",
+  "linear.create_issue",
+  "linear:issues:create",
+  "linear_team:SALES"
+]).
+```
+
+Datalog rules can then require that an `allow/2` decision includes a valid `context_path/3` — meaning the tool call is not just scope-valid but **memory-consistent** with an accepted recipe subgraph.
+
+## Demo UI: context graph panel
+
+Add a dedicated screen panel:
+
+```text
+Session Context Graph
+  - highlighted path: goal → recipe → tool → scope → resource
+  - dimmed nodes: candidates below similarity threshold
+  - red edges: missing grants or policy violations
+  - click any edge: show provenance (Dolt commit, Qdrant hit, human approval)
+  - diff view: subgraph before vs after recipe merge on main
+```
+
+This makes ScopeMemory visually distinct from generic RBAC dashboards. Reviewers see **why** the system predicted access — as a traversable memory graph, not a bullet list of scopes.
+
+---
+
+# 4. The main primitive: Workflow Authorization Recipe
 
 This should be the centerpiece of the product.
 
@@ -274,7 +544,7 @@ For Linear, this maps naturally to scopes like `read`, `issues:create`, `comment
 
 ---
 
-# 4. How a session works
+# 5. How a session works
 
 There are two phases: **preflight authorization** and **inline enforcement**.
 
@@ -303,14 +573,18 @@ Then it does:
 
 ```text
 1. Embed the session goal.
-2. Search Qdrant for similar approved Workflow Authorization Recipes.
-3. Filter recipes by team, status, tool availability, and visibility.
-4. Predict likely MCP tools and scopes.
-5. Compare predicted scopes with currently available grants.
-6. Create missing-scope access requests.
-7. Auto-approve safe predictable requests.
-8. Escalate uncertain/high-risk requests to a human.
-9. Return a narrowed tool catalog to the agent.
+2. Build the session context subgraph (user → team → goal class).
+3. Search Qdrant for similar approved Workflow Authorization Recipes.
+4. Reify semantic similar_to edges into the context graph.
+5. Expand subgraph: recipe → tools → scopes → resources.
+6. Filter recipes by team, status, tool availability, and visibility.
+7. Predict likely MCP tools and scopes from graph traversal.
+8. Compare predicted scopes with currently available grants.
+9. Create missing-scope access request nodes.
+10. Auto-approve safe predictable requests.
+11. Persist session_context_snapshot for audit.
+12. Escalate uncertain/high-risk requests to a human.
+13. Return a narrowed tool catalog to the agent.
 
 ```
 
@@ -385,7 +659,7 @@ MCP’s authorization spec already has a concept of runtime insufficient-scope h
 
 ---
 
-# 5. The decision states
+# 6. The decision states
 
 Do not make this binary.
 
@@ -433,7 +707,7 @@ Example:
 
 ---
 
-# 6. Datalog model
+# 7. Datalog model
 
 The Datalog engine should not “understand language.” It should consume typed facts.
 
@@ -567,7 +841,8 @@ Important nuance: LLMs should only produce **candidate facts** or **confidence s
 
 ```text
 LLM = perception and summarization
-Vector search = memory recall
+Memory Data Context Graph = structured authorization context
+Vector search = semantic memory recall (similar_to edges)
 Datalog = deterministic policy decision
 Dolt = auditable source of truth
 Gateway = enforcement
@@ -576,9 +851,9 @@ Gateway = enforcement
 
 ---
 
-# 7. Dolt schema
+# 8. Dolt schema
 
-Use Dolt for canonical tables.
+Use Dolt for canonical tables and for the **Memory Data Context Graph** edge layer defined in section 3 (`graph_nodes`, `graph_edges`, `session_recipe_similarity`, `session_context_snapshots`).
 
 Dolt gives you Git-like review and merge semantics for policy/recipe changes; this matters because 50 people and their agents will be proposing access recipes concurrently.
 
@@ -760,7 +1035,7 @@ This visually proves “Git for authorization memory.”
 
 ---
 
-# 8. Qdrant index design
+# 9. Qdrant index design
 
 Index only **approved** recipes for normal retrieval.
 
@@ -829,7 +1104,7 @@ Qdrant’s hybrid docs recommend RRF as a safe default when you do not have stro
 
 ---
 
-# 9. Vector refresh and migration strategy
+# 10. Vector refresh and migration strategy
 
 This part matters because your recipes and policies will evolve.
 
@@ -913,7 +1188,7 @@ Qdrant supports alias update operations through its collection alias API. ([Qdra
 
 ---
 
-# 10. Access request model
+# 11. Access request model
 
 Access requests are first-class product objects.
 
@@ -990,7 +1265,7 @@ For the demo, a Next.js approval page is faster than real Slack interactive butt
 
 ---
 
-# 11. Token handling
+# 12. Token handling
 
 The agent should never receive raw OAuth tokens.
 
@@ -1026,7 +1301,7 @@ gateway-held token vault
 
 ---
 
-# 12. How the LLM judges fit in
+# 13. How the LLM judges fit in
 
 Use three judges.
 
@@ -1111,7 +1386,7 @@ This makes the demo comprehensible.
 
 ---
 
-# 13. The MCP gateway
+# 14. The MCP gateway
 
 Build a **meta-MCP server**.
 
@@ -1163,7 +1438,7 @@ After approval:
 
 ---
 
-# 14. Hackathon implementation plan
+# 15. Hackathon implementation plan
 
 Build the smallest version that proves the whole loop.
 
@@ -1283,7 +1558,7 @@ That is the full product in one demo.
 
 ---
 
-# 15. Concrete build stack
+# 16. Concrete build stack
 
 For hackathon speed:
 
@@ -1298,6 +1573,11 @@ Gateway:
 
 Canonical DB:
   Dolt in Docker, MySQL wire protocol
+  graph_nodes, graph_edges, session_context_snapshots (see §3)
+
+Context graph:
+  SQL traversal over Dolt edge tables for hackathon MVP
+  optional CozoDB sync for graph-native queries
 
 Vector DB:
   Qdrant in Docker
@@ -1359,7 +1639,7 @@ Suggested repo:
 
 ---
 
-# 16. What to actually implement first
+# 17. What to actually implement first
 
 ## MVP 1: Session preflight
 
@@ -1476,9 +1756,9 @@ This proves the full lifecycle.
 
 ---
 
-# 17. Demo UI screens
+# 18. Demo UI screens
 
-Build five screens.
+Build six screens.
 
 ## Screen 1: Live Session
 
@@ -1498,6 +1778,9 @@ Missing Scopes:
 
 Current State:
   waiting_for_human_approval
+
+Context Graph (mini):
+  sess_123 → recipe_v3 → linear.create_issue → linear:issues:create → SALES
 
 ```
 
@@ -1533,17 +1816,43 @@ Buttons:
 
 ```
 
-## Screen 4: Proof Tree
+## Screen 4: Memory Context Graph
+
+```text
+Interactive subgraph for sess_123:
+
+  [user_suraj] --member_of--> [team_sales]
+  [sess_123] --similar_to 0.89--> [recipe_v3]
+  [recipe_v3] --predicts_tool--> [linear.create_issue]
+  [linear.create_issue] --requires_scope--> [linear:issues:create]
+  [linear:issues:create] --targets--> [linear_team:SALES]
+
+Highlighted path: ALLOW (grant present)
+Red edge: slack:channels:history (missing grant)
+
+Click edge → provenance:
+  similar_to: qdrant hit @ dolt commit abc123
+  predicts_scope: recipe accepted on main
+
+Export: session_context_snapshot JSON
+
+```
+
+## Screen 5: Proof Tree
 
 ```text
 Decision: ALLOW
 
+Context path:
+  sess_123 → recipe_sales_renewal_prep_v3 → linear.create_issue
+  → linear:issues:create → linear_team:SALES
+
 Facts:
   user_team(alice, sales)
+  graph_edge(sess_123, similar_to, recipe_sales_renewal_prep_v3, 0.89)
   requested_tool(sess_123, linear.create_issue)
   tool_requires_scope(linear.create_issue, linear:issues:create)
   current_grant(sess_123, linear:issues:create, linear_team:SALES)
-  similar_recipe(sess_123, recipe_sales_renewal_prep_v3, 0.89)
   resource_team(linear_team:SALES, sales)
 
 Rule:
@@ -1551,7 +1860,7 @@ Rule:
 
 ```
 
-## Screen 5: Recipe Review
+## Screen 6: Recipe Review
 
 ```text
 Proposal:
@@ -1569,7 +1878,7 @@ Actions:
 
 ---
 
-# 18. The “agent approver” design
+# 19. The “agent approver” design
 
 Your async agent approver should not be a normal agent with final say.
 
@@ -1623,7 +1932,7 @@ That is a strong security story.
 
 ---
 
-# 19. How teams work with it
+# 20. How teams work with it
 
 This becomes a workflow between users, agents, team owners, and security.
 
@@ -1685,7 +1994,7 @@ Platform owns MCP connectors and tool-to-scope mappings.
 
 ---
 
-# 20. Policy examples that will demo well
+# 21. Policy examples that will demo well
 
 ## Auto-approve Linear issue creation
 
@@ -1741,7 +2050,7 @@ Linear’s OAuth docs list `admin` as full access to admin-level endpoints and s
 
 ---
 
-# 21. Where auditability comes from
+# 22. Where auditability comes from
 
 Every authorization decision should store:
 
@@ -1795,7 +2104,7 @@ That is a very strong hackathon story.
 
 ---
 
-# 22. How to handle prompt injection
+# 23. How to handle prompt injection
 
 This is where your architecture shines.
 
@@ -1835,7 +2144,7 @@ Demo this with an injected Slack message. It will make the project feel real.
 
 ---
 
-# 23. What to simplify for the hackathon
+# 24. What to simplify for the hackathon
 
 Do not try to build everything fully.
 
@@ -1881,7 +2190,7 @@ That is enough.
 
 ---
 
-# 24. Build schedule
+# 25. Build schedule
 
 ## Hour 0–3: skeleton
 
@@ -1968,7 +2277,7 @@ slides/story
 
 ---
 
-# 25. Best pitch framing
+# 26. Best pitch framing
 
 Use this:
 
@@ -1984,16 +2293,16 @@ Or:
 
 ---
 
-# 26. The one-sentence technical architecture
+# 27. The one-sentence technical architecture
 
 ```text
-A context-aware MCP authorization gateway that uses Dolt for branchable authorization memory, Qdrant for semantic recipe retrieval, Datalog for deterministic policy decisions, and LLM judges for non-authoritative evidence extraction and recipe proposals.
+A context-aware MCP authorization gateway that materializes a Memory Data Context Graph from Dolt (canonical nodes/edges), Qdrant (semantic similar_to edges), and session runtime; projects that subgraph into Datalog for deterministic policy decisions; and uses LLM judges only for non-authoritative evidence extraction and recipe proposals.
 
 ```
 
 ---
 
-# 27. What I would name the hackathon project
+# 28. What I would name the hackathon project
 
 Best names:
 

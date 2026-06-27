@@ -30,20 +30,28 @@ ScopeMemory MCP Gateway
   - auth.show_decision_proof
   - auth.submit_workflow_feedback
   |
+  +--> Context Graph Compiler
+  |      - session context subgraph materialization
+  |      - graph traversal over Dolt nodes/edges
+  |      - Qdrant similar_to reification
+  |      - snapshot persistence
+  |
   +--> Policy Engine
-  |      - typed facts
+  |      - typed facts from graph snapshots
   |      - deterministic decisions
-  |      - proof trace
+  |      - proof trace with context_path
   |
   +--> Dolt
   |      - canonical recipes
   |      - tool/scope maps
+  |      - graph_nodes, graph_edges, session_context_snapshots
   |      - credential refs and bindings
   |      - grants and access requests
   |      - policy decisions and audit hashes
   |
   +--> Qdrant
   |      - derived recipe retrieval index
+  |      - semantic similar_to candidate edges
   |      - accepted recipes only for normal authorization recall
   |
   +--> Credential Broker
@@ -66,21 +74,25 @@ ScopeMemory MCP Gateway
 1. User or agent host calls `auth.preflight_goal`.
 2. Gateway creates a session with immutable goal text, user, team, agent, and available tool context.
 3. Gateway retrieves accepted recipe candidates from Qdrant.
-4. Gateway filters candidates by team, status, valid time window, available tools, and resource visibility.
-5. Gateway maps likely tools to required scopes, resources, and credential bindings.
-6. Policy decides which missing grants can be auto-approved, escalated, denied, or repaired.
-7. Gateway returns a narrowed tool catalog and access request state.
+4. Gateway reifies semantic hits into `session_recipe_similarity` and builds the session context subgraph.
+5. Gateway filters candidates by team, status, valid time window, available tools, and resource visibility.
+6. Gateway expands subgraph traversals: recipe → tools → scopes → resources → credential bindings.
+7. Gateway persists `session_context_snapshots` for the preflight phase.
+8. Gateway projects subgraph to typed policy facts.
+9. Policy decides which missing grants can be auto-approved, escalated, denied, or repaired.
+10. Gateway returns a narrowed tool catalog and access request state.
 
 ### Inline Enforcement
 
 1. Agent calls a tool.
 2. Gateway validates the tool input schema.
 3. Gateway normalizes the intent: tool, resource, write/read kind, destination, data sensitivity, and credential class.
-4. Gateway compiles typed facts.
-5. Policy returns a decision and proof trace.
-6. If execution needs a secret, the credential broker issues or uses an opaque lease.
-7. Gateway executes the downstream call or blocks.
-8. Gateway appends hash-chained audit events and returns redacted output.
+4. Gateway updates the session context subgraph for the tool call phase.
+5. Gateway compiles typed facts including graph edges and context paths.
+6. Policy returns a decision and proof trace.
+7. If execution needs a secret, the credential broker issues or uses an opaque lease.
+8. Gateway executes the downstream call or blocks.
+9. Gateway appends hash-chained audit events, new graph edges, and returns redacted output.
 
 ## Decision States
 
@@ -94,15 +106,15 @@ ScopeMemory MCP Gateway
 
 ### Dolt
 
-Dolt is canonical. It stores governed state and the audit trail. Any change that affects future authorization must be reviewable as a data diff.
+Dolt is canonical. It stores governed state, the Memory Data Context Graph node/edge layer, session context snapshots, and the audit trail. Any change that affects future authorization must be reviewable as a data diff.
 
 ### Qdrant
 
-Qdrant is retrieval only. It stores non-secret recipe chunks with metadata payloads. Every Qdrant hit is tied back to a Dolt commit hash.
+Qdrant is retrieval only. It stores non-secret recipe chunks with metadata payloads and produces candidate `similar_to` edges. Every Qdrant hit used in authorization must be reified in Dolt via `session_recipe_similarity` and tied back to a Dolt commit hash.
 
 ### Policy Engine
 
-Policy decides. It consumes facts from session context, schemas, tool mappings, recipe retrieval, grants, resource metadata, human approvals, and credential broker state. It emits a decision plus a traceable proof.
+Policy decides. It consumes facts from session context subgraphs, graph traversals, schemas, tool mappings, recipe retrieval, grants, resource metadata, human approvals, and credential broker state. It emits a decision plus a traceable proof including `context_path`.
 
 ### Credential Broker
 
@@ -125,9 +137,10 @@ LLMs perceive, classify, summarize, and propose. They can emit facts such as `go
 ### Human UI
 
 - Live session view.
+- Memory context graph panel with highlighted authorization paths.
 - Predicted tools and scopes.
 - Access request queue.
-- Approval form with proof and redacted arguments.
+- Approval form with proof, context path, and redacted arguments.
 - Tool-call timeline.
 - Recipe review with Dolt diff.
 - Index status and Qdrant hit provenance.

@@ -13,7 +13,8 @@ Policy is the only authority for runtime access. It decides over typed facts. Fa
 - tool registry.
 - MCP tool schema validation.
 - resource metadata.
-- Qdrant recipe hits tied to Dolt commits.
+- Memory Data Context Graph traversals and session context snapshots.
+- Qdrant recipe hits reified in `session_recipe_similarity`.
 - Dolt recipes and policies.
 - current grants.
 - human approvals.
@@ -93,6 +94,29 @@ judge_resource_consistent("request_123", true, 0.88).
 judge_exfiltration_risk("request_123", false, 0.80).
 ```
 
+### Graph Facts
+
+Graph facts are compiled from `session_context_snapshots.subgraph_json` and reified similarity rows. They are preferred over ad hoc recipe facts when both are available.
+
+```prolog
+graph_edge("sess_123", "similar_to", "recipe_sales_renewal_prep_v3", 0.89).
+graph_edge("recipe_sales_renewal_prep_v3", "predicts_scope", "linear:issues:create", 1.0).
+graph_edge("linear_team:SALES", "owned_by", "team_sales", 1.0).
+graph_edge("sess_123", "granted", "linear:issues:create", 1.0).
+
+context_path("sess_123", "linear.create_issue", [
+  "sess_123",
+  "recipe_sales_renewal_prep_v3",
+  "linear.create_issue",
+  "linear:issues:create",
+  "linear_team:SALES"
+]).
+
+context_snapshot("sess_123", "snap_preflight_001", "preflight").
+```
+
+`similar_recipe/3` facts must be derivable from a reified `graph_edge/4` with kind `similar_to` tied to a `session_recipe_similarity` row and matching Dolt commit.
+
 ## Decision Rules
 
 The initial implementation uses CozoDB for the policy engine. ScopeMemory still owns the typed fact compiler, decision API, and proof/audit contract; CozoDB evaluates the Datalog-like policy rules over those facts.
@@ -108,11 +132,26 @@ recipe_predicts_scope(Session, Scope) :-
   recipe_status(Recipe, "accepted"),
   recipe_scope(Recipe, Scope).
 
+recipe_predicts_scope(Session, Scope) :-
+  graph_edge(Session, "similar_to", Recipe, Score),
+  Score >= 0.82,
+  recipe_status(Recipe, "accepted"),
+  graph_edge(Recipe, "predicts_scope", Scope, _).
+
 recipe_predicts_tool(Session, Tool) :-
   similar_recipe(Session, Recipe, Score),
   Score >= 0.82,
   recipe_status(Recipe, "accepted"),
   recipe_tool(Recipe, Tool).
+
+recipe_predicts_tool(Session, Tool) :-
+  graph_edge(Session, "similar_to", Recipe, Score),
+  Score >= 0.82,
+  recipe_status(Recipe, "accepted"),
+  graph_edge(Recipe, "predicts_tool", Tool, _).
+
+memory_consistent(Session, Tool) :-
+  context_path(Session, Tool, _Path).
 
 same_team_resource(Session, Resource) :-
   session_team(Session, Team),
@@ -131,6 +170,7 @@ allow(Session, Tool) :-
   requested_resource(Session, Resource),
   same_team_resource(Session, Resource),
   recipe_predicts_tool(Session, Tool),
+  memory_consistent(Session, Tool),
   not hard_deny(Session, Tool).
 
 auto_approve_ephemeral_grant(Session, Scope) :-
@@ -174,6 +214,8 @@ Hard deny when any is true:
 - command writes decrypted credentials to disk.
 - hook rewrite would expose a secret to agent-visible input.
 - Qdrant hit is not tied to the current accepted Dolt commit or allowed index build.
+- `similar_to` edge is not reified in `session_recipe_similarity`.
+- no valid `context_path/3` exists for the requested tool when graph snapshot is present.
 
 ## Auto-Approval Requirements
 
@@ -203,10 +245,18 @@ A proof trace is a structured explanation, not necessarily a formal proof object
   "tool": "linear.create_issue",
   "required_scope": "linear:issues:create",
   "resource": "linear_team:SALES",
+  "context_snapshot_id": "snap_preflight_001",
+  "context_path": [
+    "sess_123",
+    "recipe_sales_renewal_prep_v3",
+    "linear.create_issue",
+    "linear:issues:create",
+    "linear_team:SALES"
+  ],
   "facts": [
     "session_team(sess_123, sales)",
-    "similar_recipe(sess_123, recipe_sales_renewal_prep_v3, 0.89)",
-    "recipe_scope(recipe_sales_renewal_prep_v3, linear:issues:create)",
+    "graph_edge(sess_123, similar_to, recipe_sales_renewal_prep_v3, 0.89)",
+    "graph_edge(recipe_sales_renewal_prep_v3, predicts_scope, linear:issues:create, 1.0)",
     "team_allowed_scope(sales, linear:issues:create)",
     "resource_team(linear_team:SALES, sales)",
     "credential_binding(binding_linear_sales, linear.create_issue, linear:issues:create, credref_linear_sales)",
@@ -215,6 +265,7 @@ A proof trace is a structured explanation, not necessarily a formal proof object
   "rules": [
     "required_scope",
     "recipe_predicts_scope",
+    "memory_consistent",
     "same_team_resource",
     "credential_binding_available",
     "auto_approve_ephemeral_grant"

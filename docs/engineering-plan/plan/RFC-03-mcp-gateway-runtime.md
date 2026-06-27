@@ -49,12 +49,21 @@ Output:
 ```json
 {
   "session_id": "sess_123",
+  "context_snapshot_id": "snap_preflight_001",
   "matched_recipes": [
     {
       "recipe_id": "recipe_sales_renewal_prep_v3",
       "score": 0.89,
-      "dolt_commit": "abc123"
+      "dolt_commit": "abc123",
+      "similarity_reified": true
     }
+  ],
+  "context_path_preview": [
+    "sess_123",
+    "recipe_sales_renewal_prep_v3",
+    "linear.create_issue",
+    "linear:issues:create",
+    "linear_team:SALES"
   ],
   "predicted_tools": [
     "linear.search_issues",
@@ -100,14 +109,16 @@ Pipeline:
 3. Validate schema.
 4. Normalize arguments.
 5. Detect resource, destination, access kind, and data sensitivity.
-6. Compile policy facts.
-7. Decide.
-8. If `ALLOW`, execute.
-9. If `AUTO_APPROVE_EPHEMERAL_GRANT`, create grant, maybe create credential lease, then execute.
-10. If `ESCALATE_HUMAN`, create or update access request and pause.
-11. If `DENY`, return safe denial.
-12. If `REPAIR`, return schema/argument repair instructions.
-13. Append audit event.
+6. Build or update session context subgraph for `tool_call` phase.
+7. Persist `session_context_snapshots` row.
+8. Compile policy facts including graph edges and context paths.
+9. Decide.
+10. If `ALLOW`, execute.
+11. If `AUTO_APPROVE_EPHEMERAL_GRANT`, create grant, maybe create credential lease, then execute.
+12. If `ESCALATE_HUMAN`, create or update access request and pause.
+13. If `DENY`, return safe denial.
+14. If `REPAIR`, return schema/argument repair instructions.
+15. Append audit event and new graph edges (`invoked`, `produced`).
 
 ## Downstream Execution
 

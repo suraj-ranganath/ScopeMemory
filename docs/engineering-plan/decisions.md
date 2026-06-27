@@ -32,6 +32,12 @@
 **Affected:** RFC-03, RFC-04.
 **Status:** active
 
+### D-SCM-008 - 2026-06-27 - Authorization Memory Is A Context Graph
+**Decision:** ScopeMemory models authorization memory as a Memory Data Context Graph. Dolt stores canonical graph nodes, edges, session recipe similarity reifications, and session context snapshots. Qdrant produces candidate semantic `similar_to` edges only; hits used in decisions must be reified in Dolt before policy evaluation. The gateway materializes a session context subgraph on every preflight and tool call, projects it to Datalog facts, and requires a valid `context_path` for allow/auto-approve decisions when a snapshot exists.
+**Reason:** Recipes, scopes, grants, and sessions are relational. A flat recipe blob cannot explain why access was predicted or prove memory-consistency. The context graph makes traversals explicit, auditable, and renderable in the proof UI.
+**Affected:** RFC-00, RFC-01, RFC-02, RFC-03, RFC-05.
+**Status:** active
+
 ### D-SCM-006 - 2026-06-27 - MVP Proves The Full Loop With Narrow Surfaces
 **Decision:** The first build proves one end-to-end lifecycle: preflight, access request, credential lease, gateway enforcement, audit proof, prompt-injection denial, recipe proposal, Dolt diff, and Qdrant refresh. It uses two downstream services: Linear and Slack or Slack-mock.
 **Reason:** Building every integration, every secret provider, and a formal proof engine would obscure the product thesis. The MVP must show the whole control loop with a small number of surfaces.
