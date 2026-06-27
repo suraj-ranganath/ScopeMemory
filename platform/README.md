@@ -119,11 +119,22 @@ python3 run_person_b_demo.py all
 # UI: http://127.0.0.1:8080/
 ```
 
+## Agentic Identity demo (RFC-08)
+
+Delegation lifecycle + identity proof + ReBAC policy:
+
+```bash
+docker compose --profile gateway-docker up -d --build
+python3 run_agentic_identity_demo.py
+```
+
+See `agentic_identity/README.md` and `docs/engineering-plan/plan/RFC-08-agentic-identity-integration.md`.
+
 See `person_b/README.md` for contracts, fixtures, and demo paths.
 
 ## Phase 2
 
-- Swap policy evaluator to embedded CozoDB Datalog
+- Swap policy evaluator to embedded CozoDB Datalog (optional; current demo uses `cozo_policy.py`)
 - Connect live Agentic-IAM API instead of mock
 - Enable Memgraph Lab UI for graph visualization
 - Add MCP JSON-RPC wrapper around gateway endpoints

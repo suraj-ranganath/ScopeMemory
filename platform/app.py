@@ -8,12 +8,14 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from agentic_iam import router as iam_router, verify_agent_active
+from agentic_iam import mock_router, router as iam_router, verify_agent_active
+from agentic_identity.auth import resolve_delegation_token
+from config import AGENTIC_IAM_MODE, DELEGATION_JWT_REQUIRED
 from cozo_policy import evaluate, export_facts
 from dolt_store import (
     approve_access_request,
@@ -64,6 +66,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="ScopeMemory Gateway", lifespan=lifespan)
 app.include_router(iam_router)
+app.include_router(mock_router)
 app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
 
 
@@ -81,6 +84,7 @@ def _recipe_hits_for_session(session: dict[str, Any], session_id: str) -> tuple[
 class PreflightRequest(BaseModel):
     session_id: str = "sess_demo_001"
     agent_id: str = "agent_renewal_01"
+    delegation_token: str | None = None
 
 
 class AuthorizeRequest(BaseModel):
@@ -88,6 +92,7 @@ class AuthorizeRequest(BaseModel):
     agent_id: str = "agent_renewal_01"
     tool_id: str
     resource_id: str
+    delegation_token: str | None = None
 
 
 @app.get("/health")
@@ -97,6 +102,8 @@ def health() -> dict[str, str]:
         "stack": "dolt+graph+policy",
         "graph_backend": backend_name(),
         "recipe_retrieval": backend_name(),
+        "iam_mode": AGENTIC_IAM_MODE,
+        "delegation_jwt_required": str(DELEGATION_JWT_REQUIRED).lower(),
     }
 
 
@@ -106,7 +113,10 @@ def demo_ui() -> FileResponse:
 
 
 @app.post("/auth/preflight")
-def preflight(req: PreflightRequest) -> dict[str, Any]:
+def preflight(
+    req: PreflightRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
     session = get_session(req.session_id)
     if not session:
         raise HTTPException(404, "session not found in Dolt")
@@ -114,16 +124,35 @@ def preflight(req: PreflightRequest) -> dict[str, Any]:
     if session["agent_id"] != req.agent_id:
         raise HTTPException(400, "agent does not match session")
 
+    jwt_claims = resolve_delegation_token(
+        req.session_id, req.agent_id, req.delegation_token, authorization,
+    )
+
     rows, engine = sync_graph()
     ctx = preflight_context(req.session_id)
     recipe_hits, retrieval_engine = _recipe_hits_for_session(session, req.session_id)
+    identity = {
+        "identity_ref": agent["identity_ref"],
+        "trust_score": agent["trust_score"],
+        "delegation_required": True,
+        "delegation_verified": True,
+        "iam_source": agent.get("source", AGENTIC_IAM_MODE),
+    }
     return {
         "session_id": req.session_id,
         "agentic_iam": {
             "agent_id": agent["agent_id"],
             "identity_ref": agent["identity_ref"],
             "trust_score": agent["trust_score"],
+            "source": agent.get("source"),
         },
+        "delegation_jwt": {
+            "verified": True,
+            "session_id": jwt_claims.get("session_id"),
+            "user_id": jwt_claims.get("user_id"),
+            "legacy": jwt_claims.get("legacy", False),
+        },
+        "agentic_identity": identity,
         "source_of_truth": "dolt",
         "query_engine": engine,
         "synced_rows": rows,
@@ -134,11 +163,20 @@ def preflight(req: PreflightRequest) -> dict[str, Any]:
 
 
 @app.post("/auth/authorize")
-def authorize(req: AuthorizeRequest) -> dict[str, Any]:
+def authorize(
+    req: AuthorizeRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
     session = get_session(req.session_id)
     if not session:
         raise HTTPException(404, "session not found in Dolt")
     verify_agent_active(req.agent_id)
+    if session["agent_id"] != req.agent_id:
+        raise HTTPException(400, "agent does not match session")
+
+    jwt_claims = resolve_delegation_token(
+        req.session_id, req.agent_id, req.delegation_token, authorization,
+    )
 
     sync_graph()
     ctx = authorize_context(req.session_id, req.tool_id, req.resource_id)
@@ -157,6 +195,12 @@ def authorize(req: AuthorizeRequest) -> dict[str, Any]:
         "cozo_facts": cozo_facts,
         "rules": rules,
         "policy_engine": "deterministic-rules",
+        "delegation_jwt": {
+            "verified": True,
+            "user_id": jwt_claims.get("user_id"),
+            "identity_ref": jwt_claims.get("identity_ref"),
+            "legacy": jwt_claims.get("legacy", False),
+        },
     }
 
     decision_id = save_policy_decision(

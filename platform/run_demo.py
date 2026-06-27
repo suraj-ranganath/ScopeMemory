@@ -12,10 +12,12 @@ import urllib.request
 BASE = "http://127.0.0.1:8080"
 
 
-def _request(method: str, path: str, body: dict | None = None) -> dict:
+def _request(method: str, path: str, body: dict | None = None, token: str | None = None) -> dict:
     url = f"{BASE}{path}"
     data = None
     headers = {"Accept": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     if body is not None:
         data = json.dumps(body).encode("utf-8")
         headers["Content-Type"] = "application/json"
@@ -49,6 +51,10 @@ def main() -> None:
     reseed = _request("POST", "/admin/reseed")
     print(f"Demo reseeded ({reseed.get('graph_engine')}, {reseed.get('synced_rows')} rows)")
 
+    from demo_auth import mint_token
+    token = mint_token(BASE, "sess_demo_001")
+    print("Delegation JWT minted for sess_demo_001")
+
     print("\n=== Agentic-IAM identity lookup ===")
     iam = _request("GET", "/iam/agents/agent_renewal_01")
     print(json.dumps(iam, indent=2))
@@ -57,7 +63,7 @@ def main() -> None:
     pre = _request("POST", "/auth/preflight", {
         "session_id": "sess_demo_001",
         "agent_id": "agent_renewal_01",
-    })
+    }, token=token)
     print(json.dumps(pre, indent=2))
 
     print("\n=== ALLOW: linear.create_issue ===")
@@ -66,7 +72,7 @@ def main() -> None:
         "agent_id": "agent_renewal_01",
         "tool_id": "linear.create_issue",
         "resource_id": "linear_team:SALES",
-    })
+    }, token=token)
     print(json.dumps(allow, indent=2))
     assert allow["decision"] == "ALLOW", allow
 
@@ -76,7 +82,7 @@ def main() -> None:
         "agent_id": "agent_renewal_01",
         "tool_id": "slack.post_message",
         "resource_id": "slack_channel:external-partners",
-    })
+    }, token=token)
     print(json.dumps(deny, indent=2))
     assert deny["decision"] == "DENY", deny
 
@@ -86,7 +92,7 @@ def main() -> None:
         "agent_id": "agent_renewal_01",
         "tool_id": "slack.search_messages",
         "resource_id": "slack_channel:sales-acme",
-    })
+    }, token=token)
     print(json.dumps(esc, indent=2))
     assert esc["decision"] == "ESCALATE_HUMAN", esc
 

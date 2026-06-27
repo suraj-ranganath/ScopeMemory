@@ -2,40 +2,36 @@
 
 ## Current Phase
 
-**RFC-07 — 2-hour Agentic Identity demo.** Runnable scaffold in `demo/`.
+**Platform demo + Agentic Identity integration (RFC-08).**
 
-## Route
+Runnable stacks:
 
-`DEMO_FIRST` — simplified from `HIGH_END` planning phase.
-
-Reason: full RFC-00 through RFC-06 cannot be built correctly in 2 hours. RFC-07 defines a binding subset with working code.
+- `demo/` — SQLite RFC-07 (2-hour story)
+- `platform/` — Dolt + Memgraph + Gateway + Person B UI + Agentic Identity APIs
 
 ## Verification
 
-Completed:
+```bash
+cd demo && python3 run_demo.py all
+cd platform && python3 run_agentic_identity_demo.py
+cd platform && python3 run_person_b_demo.py all
+```
 
-- Full engineering plan package (RFC-00 through RFC-06)
-- RFC-07 2-hour demo spec
-- Runnable demo: `demo/schema.sql`, `demo/rebac.py`, `demo/run_demo.py`
+## Route
 
-Pending:
-
-- Run `python demo/run_demo.py all` on target machine
-- Phase 2 implementation authorization
+`DEMO_FIRST` → `PLATFORM` → `AGENTIC_IDENTITY` → full RFC-06 Phase 2 (MCP, broker, production hardening)
 
 ## What Changed
 
 | Before | After |
 |--------|-------|
-| 40-hour MVP as first build | 2-hour SQLite ReBAC demo first |
-| 24 Dolt tables required day 1 | 11 SQLite tables in `demo/` |
-| CozoDB + 1Password + Qdrant + MCP | Deferred to RFC-06 Phase 2 |
-| 7 UI screens | Terminal JSON proof output |
+| Seeded delegation only | `POST /iam/sessions` creates delegation |
+| Partial identity in preflight | Full `rebac_tuples` + identity proof endpoint |
+| Trust score gate at IAM only | Trust score in policy facts |
+| Qdrant (planned) | Memgraph derived graph for recipes + ReBAC |
 
 ## Next Step
 
-```bash
-cd demo && python run_demo.py all
-```
-
-Then extend per RFC-06 Phase 2 work packages.
+1. Run `python3 platform/run_agentic_identity_demo.py`
+2. Signed delegation tokens + live Agentic-IAM HTTP adapter
+3. MCP JSON-RPC gateway (RFC-03)

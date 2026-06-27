@@ -28,15 +28,23 @@ class InMemoryGraph:
         if recipe:
             tools = [r["tool_id"] for r in self.data.get("recipe_tools", []) if r["recipe_id"] == recipe["recipe_id"]]
             scopes = [r["scope"] for r in self.data.get("recipe_scopes", []) if r["recipe_id"] == recipe["recipe_id"]]
+        agent = agents.get(s["agent_id"])
+        delegation = delegations.get(session_id)
+        from agentic_identity.tuples import preflight_tuples
+        rebac_tuples = preflight_tuples(s, agent, delegation, recipe)
         return {
             "session_id": session_id,
-            "agent": agents.get(s["agent_id"]),
+            "agent": agent,
             "user_id": s["user_id"],
             "goal_class": s["goal_class"],
             "matched_recipe": recipe,
             "predicted_tools": tools,
             "predicted_scopes": scopes,
-            "delegation_present": session_id in delegations,
+            "delegation_present": delegation is not None,
+            "delegation": delegation,
+            "identity_ref": agent.get("identity_ref") if agent else None,
+            "agent_trust_score": agent.get("trust_score") if agent else None,
+            "rebac_tuples": rebac_tuples,
         }
 
     def authorize(self, session_id: str, tool_id: str, resource_id: str) -> dict[str, Any]:
@@ -64,6 +72,8 @@ class InMemoryGraph:
             g for g in self.data.get("grants", [])
             if g["session_id"] == session_id and g["scope"] == ts["scope"] and g["resource_id"] == resource_id
         )
+        agents = {r["agent_id"]: r for r in self.data.get("agents", [])}
+        agent = agents.get(s["agent_id"])
         facts = {
             "delegation_present": pf.get("delegation_present", False),
             "recipe_predicts_tool": predicts,
@@ -72,6 +82,7 @@ class InMemoryGraph:
             "resource_external": bool(res["external_flag"]),
             "access_kind": ts["access_kind"],
             "scope_approval_mode": scope_mode,
+            "agent_trust_score": agent.get("trust_score") if agent else None,
         }
         context_path = [
             session_id,

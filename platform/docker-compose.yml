@@ -30,6 +30,10 @@ services:
       DOLT_DATABASE: scopememory
       MEMGRAPH_URI: bolt://memgraph:7687
       GRAPH_FALLBACK: auto
+      AGENTIC_IAM_MODE: http
+      AGENTIC_IAM_URL: http://127.0.0.1:8080/mock-iam
+      DELEGATION_JWT_REQUIRED: "true"
+      DELEGATION_JWT_SECRET: scopememory-demo-secret-change-in-production
     depends_on:
       dolt:
         condition: service_healthy

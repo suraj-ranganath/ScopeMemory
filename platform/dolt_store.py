@@ -53,12 +53,18 @@ def init_schema() -> None:
             stmt = stmt.strip()
             if stmt:
                 cur.execute(stmt)
+        # One-time migration from early Qdrant schema (no-op on fresh installs).
         try:
             cur.execute(
                 "ALTER TABLE recipe_index_meta CHANGE qdrant_point_id graph_node_id VARCHAR(128)"
             )
         except Exception:
-            pass
+            try:
+                cur.execute(
+                    "ALTER TABLE recipe_index_meta ADD COLUMN graph_node_id VARCHAR(128)"
+                )
+            except Exception:
+                pass
     conn.close()
 
 
@@ -79,9 +85,12 @@ def seed_demo() -> None:
         ("user_bob", "Bob"),
     ])
     cur.executemany("INSERT INTO teams VALUES (%s, %s)", [("team_sales", "Sales")])
-    cur.execute(
+    cur.executemany(
         "INSERT INTO user_teams VALUES (%s, %s, %s)",
-        ("user_alice", "team_sales", "member"),
+        [
+            ("user_alice", "team_sales", "member"),
+            ("user_bob", "team_sales", "admin"),
+        ],
     )
     cur.execute(
         "INSERT INTO agents VALUES (%s, %s, %s, %s, %s)",
@@ -189,6 +198,15 @@ def get_session(session_id: str) -> dict[str, Any] | None:
     return row
 
 
+def get_delegation(session_id: str) -> dict[str, Any] | None:
+    conn = connect()
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM delegations WHERE session_id = %s", (session_id,))
+        row = cur.fetchone()
+    conn.close()
+    return row
+
+
 def get_agent(agent_id: str) -> dict[str, Any] | None:
     conn = connect()
     with conn.cursor() as cur:
@@ -228,6 +246,14 @@ def approve_access_request(request_id: str, approver_id: str) -> dict[str, Any]:
         if not req:
             conn.close()
             raise ValueError(f"unknown request: {request_id}")
+        if req["status"] == "approved":
+            conn.close()
+            return {
+                "request_id": request_id,
+                "status": "approved",
+                "approver_id": req.get("approver_id"),
+                "already_approved": True,
+            }
         cur.execute(
             "UPDATE access_requests SET status = 'approved', approver_id = %s WHERE request_id = %s",
             (approver_id, request_id),
@@ -249,7 +275,15 @@ def approve_access_request(request_id: str, approver_id: str) -> dict[str, Any]:
             (req["session_id"],),
         )
     conn.close()
-    return {"request_id": request_id, "status": "approved", "grant_id": grant_id, "approver_id": approver_id}
+    result = {"request_id": request_id, "status": "approved", "grant_id": grant_id, "approver_id": approver_id}
+    try:
+        from graph_backend import sync_graph
+        rows, engine = sync_graph()
+        result["graph_synced_rows"] = rows
+        result["graph_engine"] = engine
+    except Exception:
+        pass
+    return result
 
 
 def list_access_requests(session_id: str | None = None) -> list[dict[str, Any]]:

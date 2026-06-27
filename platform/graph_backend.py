@@ -24,26 +24,29 @@ def _probe_memgraph() -> bool:
         return False
 
 
-def backend_name() -> str:
+def backend_name(*, force_probe: bool = False) -> str:
     global _backend
-    if _backend:
-        return _backend
-    if USE_FALLBACK == "inmemory":
-        _backend = "inmemory"
-    elif USE_FALLBACK == "memgraph":
-        _backend = "memgraph"
-    else:
-        _backend = "memgraph" if _probe_memgraph() else "inmemory"
+    if force_probe or _backend is None:
+        if USE_FALLBACK == "inmemory":
+            _backend = "inmemory"
+        elif USE_FALLBACK == "memgraph":
+            _backend = "memgraph" if _probe_memgraph() else "inmemory"
+        else:
+            _backend = "memgraph" if _probe_memgraph() else "inmemory"
     return _backend
 
 
 def sync_graph() -> tuple[int, str]:
-    name = backend_name()
+    name = backend_name(force_probe=True)
     if name == "memgraph":
-        from memgraph_sync import sync_to_memgraph
-        return sync_to_memgraph(), name
+        try:
+            from memgraph_sync import sync_to_memgraph
+            return sync_to_memgraph(), name
+        except Exception:
+            global _backend
+            _backend = "inmemory"
     from graph_fallback import get_inmemory
-    return get_inmemory().reload(), name
+    return get_inmemory().reload(), "inmemory"
 
 
 def preflight_context(session_id: str) -> dict[str, Any]:

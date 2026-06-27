@@ -69,9 +69,25 @@ function renderTimeline(events) {
     </div>`).join("") || "<p>No events</p>";
 }
 
+function renderIdentity(proof) {
+  el("identity").innerHTML = `
+    <div class="card">
+      <div><strong>${proof.agent_id || "—"}</strong></div>
+      <div>identity_ref: ${proof.identity_ref || "—"}</div>
+      <div>trust: ${proof.trust_score ?? "—"} · delegation: ${proof.delegation_present ? "yes" : "no"}</div>
+      <pre>${(proof.rebac_tuples || []).join("\n")}</pre>
+    </div>`;
+}
+
 async function refresh() {
   const state = await api(`/demo/ui-state/${SESSION}`);
   renderSession(state.session);
+  try {
+    const proof = await api(`/iam/sessions/${SESSION}/identity-proof`);
+    renderIdentity(proof);
+  } catch (_) {
+    el("identity").innerHTML = "<p>No identity proof</p>";
+  }
   renderRecipes(state.recipe_hits || []);
   renderRequests(state.access_requests || []);
   renderProof(state.policy_decisions || []);

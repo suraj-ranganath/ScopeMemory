@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import uuid
 from typing import Any
 
 from dolt_store import connect
@@ -23,6 +22,14 @@ def propose_recipe_from_session(session_id: str) -> dict[str, Any]:
             (session["goal_class"], session["team_id"]),
         )
         base = cur.fetchone()
+        if not base:
+            conn.close()
+            return {
+                "should_propose_recipe": False,
+                "session_id": session_id,
+                "reason": f"no accepted recipe for goal_class={session['goal_class']}",
+            }
+
         cur.execute("SELECT tool_id FROM recipe_tools WHERE recipe_id = %s", (base["recipe_id"],))
         tools = [r["tool_id"] for r in cur.fetchall()]
         cur.execute("SELECT scope, approval_mode FROM recipe_scopes WHERE recipe_id = %s", (base["recipe_id"],))
