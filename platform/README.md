@@ -162,6 +162,17 @@ npm run build
 
 Then open http://127.0.0.1:8080/. The Docker image builds this React bundle automatically.
 
+## Streamlit Policy Console
+
+Agentic Identity product UI (delegation chain, ReBAC policy, human approvals):
+
+```bash
+docker compose --profile gateway-docker up -d --build
+./run_policy_console.sh
+```
+
+Opens at http://localhost:8501 — connects to gateway on :8080.
+
 See `person_b/README.md` for contracts, fixtures, and demo paths.
 
 ## Phase 2

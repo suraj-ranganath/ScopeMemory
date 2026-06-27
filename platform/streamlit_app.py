@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
-ScopeMemory Demo UI — Streamlit frontend for the full platform stack.
+ScopeMemory Policy Console — Agentic Identity product UI.
 
-Run (gateway must be up on :8080):
-    cd platform && pip install -r requirements.txt
-    streamlit run streamlit_app.py
+Run (gateway on :8080):
+    cd platform && ./run_ui.sh
 """
 
 from __future__ import annotations
@@ -16,14 +15,20 @@ import streamlit as st
 
 from ui.client import GatewayClient
 from ui.components import (
-    decision_badge,
-    hero,
-    inject_css,
+    agent_profile,
+    approval_card,
+    context_path_steps,
+    decision_hero,
+    dev_json,
+    identity_chain,
     init_session_state,
-    json_block,
-    metrics_row,
+    inject_css,
+    live_badge,
+    metric_grid,
+    policy_row,
+    product_header,
     rebac_tuples,
-    show_decision,
+    section,
 )
 
 DEFAULTS = {
@@ -37,146 +42,211 @@ DEFAULTS = {
     "goal_class": "sales_renewal_prep",
 }
 
+NAV = [
+    "Policy Console",
+    "Delegation & Identity",
+    "Tool Authorization",
+    "Human Approvals",
+    "Audit Trail",
+    "Advanced",
+]
+
 
 def client() -> GatewayClient:
     return GatewayClient(st.session_state.gateway_url)
 
 
 def ensure_token() -> str | None:
-    token = st.session_state.delegation_token
-    if token:
-        return token
+    if st.session_state.delegation_token:
+        return st.session_state.delegation_token
     try:
-        token = client().mint_token(st.session_state.session_id)
-        st.session_state.delegation_token = token
-        return token
-    except Exception as e:
-        st.error(f"Could not mint JWT: {e}")
+        st.session_state.delegation_token = client().mint_token(st.session_state.session_id)
+        return st.session_state.delegation_token
+    except Exception:
         return None
 
 
-def sidebar() -> None:
+def load_console_data(force: bool = False) -> None:
+    if st.session_state.get("_console_loaded") and not force:
+        return
+    c = client()
+    sid = st.session_state.session_id
+    aid = st.session_state.agent_id
+    try:
+        st.session_state["_health"] = c.health()
+        st.session_state["_agent"] = c.get_agent(aid)
+        st.session_state["_proof"] = c.identity_proof(sid)
+        st.session_state["_ui"] = c.ui_state(sid)
+        ensure_token()
+        token = st.session_state.delegation_token
+        if token:
+            st.session_state["_preflight"] = c.preflight(sid, aid, token)
+        st.session_state["_console_loaded"] = True
+    except Exception as e:
+        st.session_state["_console_error"] = GatewayClient.format_error(e)
+
+
+def sidebar() -> str:
     with st.sidebar:
-        st.markdown("### ⚙ Connection")
-        st.session_state.gateway_url = st.text_input(
-            "Gateway URL", value=st.session_state.gateway_url,
-        )
-        st.session_state.session_id = st.text_input(
-            "Session ID", value=st.session_state.session_id,
-        )
-        st.session_state.agent_id = st.text_input(
-            "Agent ID", value=st.session_state.agent_id,
+        st.markdown(
+            """
+            <div style="padding:0.5rem 0 1rem 0;">
+              <div style="color:#f8fafc;font-weight:700;font-size:1rem;">Policy Console</div>
+              <div style="color:#64748b;font-size:0.75rem;">Agentic Identity · ReBAC</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
 
+        page = st.radio("Navigate", NAV, label_visibility="collapsed")
+
         st.divider()
-        st.markdown("### 🔑 Delegation JWT")
-        if st.button("Mint JWT", use_container_width=True):
-            try:
-                st.session_state.delegation_token = client().mint_token(
-                    st.session_state.session_id,
-                )
-                st.success("JWT minted")
-            except Exception as e:
-                st.error(GatewayClient.format_error(e))
+        section("Active session")
+        st.session_state.session_id = st.text_input("Session", st.session_state.session_id, label_visibility="collapsed")
+        st.session_state.agent_id = st.text_input("Agent", st.session_state.agent_id, label_visibility="collapsed")
 
         if st.session_state.delegation_token:
-            st.caption(f"Token ({len(st.session_state.delegation_token)} chars)")
-            with st.expander("View token"):
-                st.code(st.session_state.delegation_token[:80] + "…")
+            st.markdown(live_badge("JWT delegation active"), unsafe_allow_html=True)
+        else:
+            st.markdown('<span class="badge badge-neutral">No delegation token</span>', unsafe_allow_html=True)
 
-        st.divider()
-        if st.button("🔄 Reseed demo data", use_container_width=True):
-            try:
-                r = client().reseed()
-                st.session_state.delegation_token = client().mint_token(
-                    st.session_state.session_id,
-                )
-                st.success(f"Reseeded · {r.get('graph_engine')} · {r.get('synced_rows')} rows")
-            except Exception as e:
-                st.error(GatewayClient.format_error(e))
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if st.button("Refresh", use_container_width=True):
+                st.session_state.pop("_console_loaded", None)
+                load_console_data(force=True)
+                st.rerun()
+        with col_b:
+            if st.button("Reseed", use_container_width=True):
+                try:
+                    client().reseed()
+                    st.session_state.delegation_token = client().mint_token(st.session_state.session_id)
+                    st.session_state.pop("_console_loaded", None)
+                    load_console_data(force=True)
+                    st.rerun()
+                except Exception as e:
+                    st.error(GatewayClient.format_error(e))
+
+        with st.expander("Connection"):
+            st.session_state.gateway_url = st.text_input("Gateway URL", st.session_state.gateway_url)
+            if st.button("Mint delegation JWT", use_container_width=True):
+                try:
+                    st.session_state.delegation_token = client().mint_token(st.session_state.session_id)
+                    st.rerun()
+                except Exception as e:
+                    st.error(GatewayClient.format_error(e))
 
         try:
-            h = client().health()
-            st.caption(
-                f"● {h.get('status')} · {h.get('graph_backend')} · "
-                f"IAM {h.get('iam_mode')} · JWT {h.get('delegation_jwt_required')}"
-            )
+            h = st.session_state.get("_health") or client().health()
+            st.caption(f"● Online · {h.get('graph_backend')} · IAM {h.get('iam_mode')}")
         except Exception:
             st.caption("● Gateway offline")
 
+        return page
 
-def page_overview() -> None:
-    hero(
-        "ScopeMemory",
-        "Memory-informed authorization for MCP agents — ReBAC context paths, delegation JWT, policy proofs.",
-    )
 
-    try:
-        h = client().health()
-        metrics_row([
-            ("Stack", h.get("stack", "—")),
-            ("Graph", h.get("graph_backend", "—")),
-            ("IAM mode", h.get("iam_mode", "—")),
-            ("MCP", h.get("mcp_endpoint", "/mcp")),
-        ])
-        json_block(h, "Health response")
-    except Exception as e:
-        st.error(f"Gateway unreachable: {GatewayClient.format_error(e)}")
-        st.info("Start the stack: `docker compose --profile gateway-docker up -d --build`")
+def page_console() -> None:
+    if st.session_state.get("_console_error"):
+        st.error(f"Could not connect: {st.session_state['_console_error']}")
+        st.info("Start backend: `docker compose --profile gateway-docker up -d --build`")
         return
 
-    st.markdown("### Architecture")
-    st.markdown(
-        """
-        ```
-        Agentic-IAM → Delegation JWT → Gateway (REST + MCP)
-              ↓                              ↓
-           Dolt (truth)              Memgraph (ReBAC + recipes)
-              ↓                              ↓
-                        Policy → ALLOW / DENY / ESCALATE
-        ```
-        """
-    )
+    agent = st.session_state.get("_agent", {})
+    proof = st.session_state.get("_proof", {})
+    ui = st.session_state.get("_ui", {})
+    session = ui.get("session", {})
+    pf = st.session_state.get("_preflight", {})
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.markdown("**RFC-08** · Agentic Identity")
-        st.caption("JWT delegation + IAM adapter")
-    with col2:
-        st.markdown("**RFC-03** · MCP Gateway")
-        st.caption("JSON-RPC tools/call with JWT")
-    with col3:
-        st.markdown("**RFC-06** · Person B")
-        st.caption("Approval flows + recipe learning")
+    metric_grid([
+        ("Agent trust", f"{agent.get('trust_score', 0):.0%}" if agent else "—"),
+        ("Delegation", "Verified" if proof.get("delegation_present") else "Missing"),
+        ("Recipe match", str(len(pf.get("recipe_hits", [])))),
+        ("Pending approvals", str(len([r for r in ui.get("access_requests", []) if r.get("status") == "pending"]))),
+    ])
+
+    left, right = st.columns([1.1, 1])
+
+    with left:
+        section("Identity chain")
+        identity_chain(
+            st.session_state.user_id,
+            st.session_state.agent_id,
+            st.session_state.session_id,
+            agent.get("identity_ref") or proof.get("identity_ref"),
+        )
+
+        section("Session goal")
+        st.markdown(
+            f'<div class="panel"><div style="color:#e2e8f0;font-size:0.92rem;">{session.get("goal", st.session_state.goal)}</div>'
+            f'<div style="color:#64748b;font-size:0.78rem;margin-top:0.5rem;">Class: {session.get("goal_class", st.session_state.goal_class)} · Team: {st.session_state.team_id}</div></div>',
+            unsafe_allow_html=True,
+        )
+
+        section("Matched workflow recipe")
+        for hit in pf.get("recipe_hits", ui.get("recipe_hits", [])):
+            st.markdown(
+                f'<div class="panel" style="padding:0.75rem 1rem;">'
+                f'<div style="color:#f1f5f9;font-weight:600;">{hit.get("title", hit.get("recipe_id"))}</div>'
+                f'<div style="color:#64748b;font-size:0.78rem;">Score {hit.get("score", "—")} · predicts {", ".join(hit.get("predicted_tools", [])[:2])}</div></div>',
+                unsafe_allow_html=True,
+            )
+
+    with right:
+        if agent:
+            agent_profile(
+                agent.get("display_name", st.session_state.agent_id),
+                st.session_state.agent_id,
+                agent.get("identity_ref", ""),
+                float(agent.get("trust_score", 0)),
+                agent.get("source", "iam"),
+            )
+
+        section("Recent policy decisions")
+        decisions = ui.get("policy_decisions", [])
+        if not decisions:
+            st.info("Run tool authorization to see policy outcomes.")
+        for d in reversed(decisions[-5:]):
+            policy_row(d.get("tool_id", ""), d.get("resource_id", ""), d.get("decision", ""))
+
+        pending = [r for r in ui.get("access_requests", []) if r.get("status") == "pending"]
+        if pending:
+            section("Awaiting human approval")
+            for r in pending[:2]:
+                approval_card(
+                    r.get("requested_tool_id", ""),
+                    r.get("requested_resource", ""),
+                    r.get("requested_scope", ""),
+                    r.get("reason", ""),
+                    r.get("status", "pending"),
+                )
 
 
-def page_identity() -> None:
-    hero("Agentic Identity", "Who is the agent? Delegation chain and identity proof (RFC-08).")
-
+def page_delegation() -> None:
+    section("Agent registry · Agentic-IAM")
     c1, c2 = st.columns(2)
 
     with c1:
-        st.markdown("#### Agent registry")
-        if st.button("Lookup agent", key="lookup_agent"):
+        if st.button("Refresh agent profile", use_container_width=True):
             try:
-                agent = client().get_agent(st.session_state.agent_id)
-                st.session_state["_agent"] = agent
+                st.session_state["_agent"] = client().get_agent(st.session_state.agent_id)
             except Exception as e:
                 st.error(GatewayClient.format_error(e))
-        if "_agent" in st.session_state:
-            a = st.session_state["_agent"]
-            metrics_row([
-                ("Display", a.get("display_name", "—")),
-                ("Trust", str(a.get("trust_score", "—"))),
-                ("Source", a.get("source", "—")),
-            ])
-            st.code(a.get("identity_ref", ""), language=None)
-            json_block(a)
+
+        agent = st.session_state.get("_agent")
+        if agent:
+            agent_profile(
+                agent.get("display_name", ""),
+                agent.get("agent_id", ""),
+                agent.get("identity_ref", ""),
+                float(agent.get("trust_score", 0)),
+                agent.get("source", ""),
+            )
+            dev_json(agent)
 
     with c2:
-        st.markdown("#### Create delegation")
-        goal = st.text_area("Goal", value=st.session_state.goal, height=80)
-        if st.button("POST /iam/sessions", key="create_session"):
+        section("Create new delegation")
+        goal = st.text_area("Task goal", st.session_state.goal, height=90)
+        if st.button("Delegate agent to task", type="primary", use_container_width=True):
             try:
                 r = client().create_session(
                     st.session_state.user_id,
@@ -187,422 +257,328 @@ def page_identity() -> None:
                 )
                 st.session_state.session_id = r["session"]["session_id"]
                 st.session_state.delegation_token = r["delegation_token"]
-                st.success(f"Session `{st.session_state.session_id}` created")
-                json_block(r, "Session response")
+                st.session_state.pop("_console_loaded", None)
+                st.success("Delegation created — signed JWT issued")
+                dev_json(r)
+                st.rerun()
             except Exception as e:
                 st.error(GatewayClient.format_error(e))
 
     st.divider()
-    st.markdown("#### Identity proof (ReBAC tuples)")
-    if st.button("Load identity proof", key="id_proof"):
+    section("Identity proof · ReBAC chain")
+
+    if st.button("Load identity proof", use_container_width=True):
         try:
-            proof = client().identity_proof(st.session_state.session_id)
-            st.session_state["_proof"] = proof
+            st.session_state["_proof"] = client().identity_proof(st.session_state.session_id)
         except Exception as e:
             st.error(GatewayClient.format_error(e))
 
-    if "_proof" in st.session_state:
-        p = st.session_state["_proof"]
-        metrics_row([
-            ("Agent", p.get("agent_id", "—")),
-            ("Delegation", "yes" if p.get("delegation_present") else "no"),
-            ("Trust", str(p.get("trust_score", "—"))),
-        ])
-        rebac_tuples(p.get("rebac_tuples", []))
-        json_block(p)
+    proof = st.session_state.get("_proof", {})
+    if proof:
+        identity_chain(
+            proof.get("user_id", st.session_state.user_id),
+            proof.get("agent_id", st.session_state.agent_id),
+            st.session_state.session_id,
+            proof.get("identity_ref"),
+        )
+        rebac_tuples(proof.get("rebac_tuples", []))
+        dev_json(proof)
 
 
 def page_authorization() -> None:
-    hero("Authorization", "Preflight goal → policy decision with proof (JWT required).")
-
     token = ensure_token()
     if not token:
+        st.warning("Mint a delegation JWT from the sidebar to authorize tool calls.")
         return
 
-    c1, c2 = st.columns(2)
+    section("Step 1 · Preflight goal memory")
+    if st.button("Run preflight", use_container_width=True):
+        try:
+            st.session_state["_preflight"] = client().preflight(
+                st.session_state.session_id, st.session_state.agent_id, token,
+            )
+        except Exception as e:
+            st.error(GatewayClient.format_error(e))
 
-    with c1:
-        st.markdown("#### Preflight")
-        if st.button("Run preflight", key="preflight"):
-            try:
-                r = client().preflight(
-                    st.session_state.session_id,
-                    st.session_state.agent_id,
-                    token,
-                )
-                st.session_state["_preflight"] = r
-            except Exception as e:
-                st.error(GatewayClient.format_error(e))
-
-        if "_preflight" in st.session_state:
-            pf = st.session_state["_preflight"]
-            hits = pf.get("recipe_hits", [])
-            st.markdown(f"**{len(hits)}** recipe hit(s)")
-            for h in hits:
-                st.markdown(
-                    f"- **{h.get('title', h.get('recipe_id'))}** "
-                    f"(score {h.get('score', '—')})"
-                )
+    pf = st.session_state.get("_preflight", {})
+    if pf:
+        c1, c2 = st.columns(2)
+        with c1:
             st.markdown("**Predicted tools**")
-            st.write(pf.get("predicted_tools", []))
-            rebac_tuples(pf.get("rebac_tuples", []))
-
-    with c2:
-        st.markdown("#### Authorize tool call")
-        tool_id = st.selectbox(
-            "Tool",
-            [
-                "linear.create_issue",
-                "slack.search_messages",
-                "slack.post_message",
-            ],
-        )
-        resource_defaults = {
-            "linear.create_issue": "linear_team:SALES",
-            "slack.search_messages": "slack_channel:sales-acme",
-            "slack.post_message": "slack_channel:external-partners",
-        }
-        resource_id = st.text_input(
-            "Resource ID", value=resource_defaults.get(tool_id, ""),
-        )
-        if st.button("Authorize", key="authorize"):
-            try:
-                r = client().authorize(
-                    st.session_state.session_id,
-                    st.session_state.agent_id,
-                    tool_id,
-                    resource_id,
-                    token,
-                )
-                st.session_state["_last_auth"] = r
-            except Exception as e:
-                st.error(GatewayClient.format_error(e))
-
-        if "_last_auth" in st.session_state:
-            auth = st.session_state["_last_auth"]
-            show_decision(auth.get("decision", ""), auth.get("reason"))
-            proof = auth.get("proof", {})
-            st.markdown("**Context path**")
-            st.code(" → ".join(proof.get("context_path", [])))
-            json_block(auth, "Full authorize response")
+            for t in pf.get("predicted_tools", []):
+                st.markdown(f"- `{t}`")
+        with c2:
+            st.markdown("**Predicted scopes**")
+            for s in pf.get("predicted_scopes", []):
+                st.markdown(f"- `{s}`")
+        rebac_tuples(pf.get("rebac_tuples", []), "Preflight ReBAC context")
 
     st.divider()
-    st.markdown("#### Audit trail")
-    if st.button("Load proof trail", key="proof_trail"):
+    section("Step 2 · Evaluate tool call policy")
+
+    tool_id = st.selectbox(
+        "MCP tool",
+        ["linear.create_issue", "slack.search_messages", "slack.post_message"],
+        format_func=lambda t: {
+            "linear.create_issue": "Linear · Create issue",
+            "slack.search_messages": "Slack · Search messages",
+            "slack.post_message": "Slack · Post message",
+        }.get(t, t),
+    )
+    defaults = {
+        "linear.create_issue": "linear_team:SALES",
+        "slack.search_messages": "slack_channel:sales-acme",
+        "slack.post_message": "slack_channel:external-partners",
+    }
+    resource_id = st.text_input("Target resource", defaults.get(tool_id, ""))
+
+    if st.button("Evaluate policy", type="primary", use_container_width=True):
         try:
-            st.session_state["_trail"] = client().proof_trail(st.session_state.session_id)
+            r = client().authorize(
+                st.session_state.session_id,
+                st.session_state.agent_id,
+                tool_id,
+                resource_id,
+                token,
+            )
+            st.session_state["_last_auth"] = r
+            st.session_state.pop("_console_loaded", None)
+            load_console_data(force=True)
         except Exception as e:
             st.error(GatewayClient.format_error(e))
-    if "_trail" in st.session_state:
-        for d in st.session_state["_trail"].get("decisions", []):
-            with st.expander(f"{d.get('tool_id')} · {d.get('decision')}"):
-                st.markdown(
-                    decision_badge(d.get("decision", "")),
-                    unsafe_allow_html=True,
-                )
-                proof = d.get("proof_json")
-                if isinstance(proof, str):
-                    proof = json.loads(proof)
-                st.json(proof)
 
+    if "_last_auth" in st.session_state:
+        auth = st.session_state["_last_auth"]
+        decision_hero(auth.get("decision", ""), auth.get("reason"))
+        section("Context path · proof trace")
+        context_path_steps(auth.get("proof", {}).get("context_path", []))
+        rebac_tuples(auth.get("proof", {}).get("rebac_tuples", []), "Policy ReBAC tuples")
+        dev_json(auth)
 
-def page_session() -> None:
-    hero("Session dashboard", "Live session state — recipes, grants, requests, timeline.")
-
-    if st.button("Refresh UI state", key="ui_refresh"):
-        try:
-            st.session_state["_ui"] = client().ui_state(st.session_state.session_id)
-        except Exception as e:
-            st.error(GatewayClient.format_error(e))
-
-    if "_ui" not in st.session_state:
-        try:
-            st.session_state["_ui"] = client().ui_state(st.session_state.session_id)
-        except Exception:
-            st.warning("Could not load UI state — is the gateway running?")
-            return
-
-    state = st.session_state["_ui"]
-    session = state.get("session", {})
-
-    metrics_row([
-        ("Session", session.get("session_id", "—")),
-        ("Status", session.get("status", state.get("ui_status", "—"))),
-        ("Goal class", session.get("goal_class", "—")),
-        ("Mode", state.get("mode", "—")),
-    ])
-    st.caption(session.get("goal", ""))
-
-    tab1, tab2, tab3, tab4 = st.tabs(["Recipes & scopes", "Access requests", "Decisions", "Timeline"])
-
-    with tab1:
-        for hit in state.get("recipe_hits", []):
-            st.markdown(f"**{hit.get('title', hit.get('recipe_id'))}** · score {hit.get('score', '—')}")
-        st.markdown("**Predicted tools:** " + ", ".join(state.get("predicted_tools", [])))
-        st.markdown("**Predicted scopes:** " + ", ".join(state.get("predicted_scopes", [])))
-        grants = state.get("grants", [])
-        if grants:
-            st.markdown("**Active grants**")
-            for g in grants:
-                st.markdown(f"- `{g.get('scope')}` → `{g.get('resource_id')}`")
-
-    with tab2:
-        for req in state.get("access_requests", []):
-            cols = st.columns([3, 1])
-            with cols[0]:
-                st.markdown(
-                    f"**{req.get('requested_tool_id')}** → `{req.get('requested_resource')}`"
-                )
-                st.caption(req.get("reason", ""))
-                st.markdown(
-                    decision_badge(req.get("status", "pending").upper()),
-                    unsafe_allow_html=True,
-                )
-            with cols[1]:
-                if req.get("status") == "pending":
-                    if st.button("Approve (Bob)", key=f"appr_{req.get('request_id')}"):
-                        try:
-                            client().approve_request(req["request_id"])
-                            st.session_state.pop("_ui", None)
-                            st.rerun()
-                        except Exception as e:
-                            st.error(GatewayClient.format_error(e))
-
-    with tab3:
-        for d in state.get("policy_decisions", []):
-            with st.expander(
-                f"{d.get('tool_id')} @ {d.get('resource_id')} — {d.get('decision')}",
-            ):
-                show_decision(d.get("decision", ""))
-                proof = d.get("proof") or d.get("proof_json")
-                if isinstance(proof, str):
-                    proof = json.loads(proof)
-                if proof:
-                    st.json(proof)
-
-    with tab4:
-        for ev in state.get("timeline", []):
-            st.markdown(f"**{ev.get('event_type')}**")
-            payload = ev.get("payload") or ev.get("event_json")
-            if isinstance(payload, str):
-                payload = json.loads(payload)
-            st.json(payload)
-
-
-def page_scenarios() -> None:
-    hero("Demo scenarios", "One-click Person B paths — happy, approval, denial, learning.")
-
-    token = ensure_token()
-    if not token:
-        return
-
-    sid = st.session_state.session_id
-    aid = st.session_state.agent_id
-    c = client()
-
+    st.divider()
+    section("Guided policy scenarios")
     scenarios = [
-        (
-            "Path 1 · Happy (Linear ALLOW)",
-            "linear.create_issue",
-            "linear_team:SALES",
-            "ALLOW",
-        ),
-        (
-            "Path 2 · Approval (Slack ESCALATE)",
-            "slack.search_messages",
-            "slack_channel:sales-acme",
-            "ESCALATE_HUMAN",
-        ),
-        (
-            "Path 3 · Denial (external post)",
-            "slack.post_message",
-            "slack_channel:external-partners",
-            "DENY",
-        ),
+        ("Auto-approved Linear write", "linear.create_issue", "linear_team:SALES", "ALLOW"),
+        ("Slack read needs approval", "slack.search_messages", "slack_channel:sales-acme", "ESCALATE_HUMAN"),
+        ("External post blocked", "slack.post_message", "slack_channel:external-partners", "DENY"),
     ]
-
-    for label, tool, resource, expected in scenarios:
-        with st.expander(label, expanded=False):
-            if st.button(f"Run {label}", key=f"sc_{tool}_{resource}"):
+    cols = st.columns(3)
+    for i, (label, tool, res, _) in enumerate(scenarios):
+        with cols[i]:
+            if st.button(label, key=f"sc_{i}", use_container_width=True):
                 try:
-                    r = c.authorize(sid, aid, tool, resource, token)
-                    got = r.get("decision")
-                    if got == expected:
-                        st.success(f"Expected {expected}")
-                    else:
-                        st.warning(f"Got {got}, expected {expected}")
-                    show_decision(got, r.get("reason"))
-                    json_block(r)
+                    r = client().authorize(
+                        st.session_state.session_id, st.session_state.agent_id,
+                        tool, res, token,
+                    )
+                    st.session_state["_last_auth"] = r
+                    st.rerun()
                 except Exception as e:
                     st.error(GatewayClient.format_error(e))
 
+
+def page_approvals() -> None:
+    section("Human-in-the-loop · scope approvals")
+    st.caption("When policy returns ESCALATE, a human approver grants scoped access.")
+
+    ui = st.session_state.get("_ui") or {}
+    try:
+        ui = client().ui_state(st.session_state.session_id)
+        st.session_state["_ui"] = ui
+    except Exception as e:
+        st.error(GatewayClient.format_error(e))
+        return
+
+    requests = ui.get("access_requests", [])
+    pending = [r for r in requests if r.get("status") == "pending"]
+    resolved = [r for r in requests if r.get("status") != "pending"]
+
+    metric_grid([
+        ("Pending", str(len(pending))),
+        ("Resolved", str(len(resolved))),
+        ("Active grants", str(len(ui.get("grants", [])))),
+        ("Session status", ui.get("session", {}).get("status", "—")),
+    ])
+
+    if pending:
+        for r in pending:
+            approval_card(
+                r.get("requested_tool_id", ""),
+                r.get("requested_resource", ""),
+                r.get("requested_scope", ""),
+                r.get("reason", ""),
+                "pending",
+            )
+            if st.button(f"Approve as Bob · {r.get('request_id')}", key=f"appr_{r.get('request_id')}"):
+                try:
+                    client().approve_request(r["request_id"])
+                    st.session_state.pop("_console_loaded", None)
+                    st.success("Scope approved — grant recorded in Dolt")
+                    st.rerun()
+                except Exception as e:
+                    st.error(GatewayClient.format_error(e))
+    else:
+        st.success("No pending approval requests.")
+
+    if resolved:
+        st.divider()
+        section("Resolved requests")
+        for r in resolved:
+            approval_card(
+                r.get("requested_tool_id", ""),
+                r.get("requested_resource", ""),
+                r.get("requested_scope", ""),
+                r.get("reason", ""),
+                r.get("status", ""),
+            )
+
+    grants = ui.get("grants", [])
+    if grants:
+        st.divider()
+        section("Active scope grants")
+        for g in grants:
+            st.markdown(
+                f'<div class="panel" style="padding:0.65rem 1rem;">'
+                f'<code>{g.get("scope")}</code> → <code>{g.get("resource_id")}</code></div>',
+                unsafe_allow_html=True,
+            )
+
+
+def page_audit() -> None:
+    section("Policy audit trail · Dolt-backed proofs")
+
+    try:
+        trail = client().proof_trail(st.session_state.session_id)
+        ui = client().ui_state(st.session_state.session_id)
+    except Exception as e:
+        st.error(GatewayClient.format_error(e))
+        return
+
+    decisions = trail.get("decisions", []) or ui.get("policy_decisions", [])
+
+    if not decisions:
+        st.info("No policy decisions recorded yet. Authorize a tool call first.")
+        return
+
+    for d in reversed(decisions):
+        proof_raw = d.get("proof_json") or d.get("proof")
+        proof = json.loads(proof_raw) if isinstance(proof_raw, str) else (proof_raw or {})
+        with st.expander(
+            f"{d.get('tool_id')} · {d.get('decision')} · {d.get('resource_id', '')}",
+            expanded=len(decisions) <= 3,
+        ):
+            decision_hero(d.get("decision", ""), proof.get("reason"))
+            context_path_steps(proof.get("context_path", []))
+            rebac_tuples(proof.get("rebac_tuples", []))
+            if proof.get("rules"):
+                st.markdown("**Rules fired:** " + ", ".join(proof["rules"]))
+            dev_json(proof, "Full proof JSON")
+
     st.divider()
-    st.markdown("#### Path 4 · Learning")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Sync graph index"):
+    section("Session timeline")
+    for ev in ui.get("timeline", []):
+        payload = ev.get("payload") or ev.get("event_json")
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        st.markdown(f"**{ev.get('event_type')}**")
+        dev_json(payload, "Event payload")
+
+
+def page_advanced() -> None:
+    section("MCP gateway · JSON-RPC transport")
+    st.caption("Agents connect to ScopeMemory as a meta-MCP server. JWT required on tools/call.")
+
+    token = ensure_token()
+    c = client()
+
+    if st.button("MCP initialize"):
+        try:
+            st.session_state["_mcp_init"] = c.mcp("initialize", {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "policy-console", "version": "1.0"},
+            })
+        except Exception as e:
+            st.error(GatewayClient.format_error(e))
+
+    if st.button("List session tools"):
+        try:
+            st.session_state["_mcp_tools"] = c.mcp(
+                "tools/list",
+                {"_meta": {"session_id": st.session_state.session_id, "agent_id": st.session_state.agent_id}},
+                token=token,
+                req_id=2,
+            )
+        except Exception as e:
+            st.error(GatewayClient.format_error(e))
+
+    if "_mcp_tools" in st.session_state:
+        tools = st.session_state["_mcp_tools"].get("result", {}).get("tools", [])
+        for t in tools:
+            st.markdown(f"- `{t.get('name')}`")
+
+    st.divider()
+    section("Recipe learning · graph index")
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Sync recipe index"):
             try:
-                r = c.index_recipes()
-                st.success(f"Indexed: {r.get('indexed')}")
-                json_block(r)
+                dev_json(client().index_recipes())
             except Exception as e:
                 st.error(GatewayClient.format_error(e))
-    with col2:
+    with c2:
         if st.button("Propose recipe v4"):
             try:
-                r = c.propose_recipe(sid)
-                st.success(f"Proposal: {r.get('proposal_id')}")
-                json_block(r)
+                dev_json(client().propose_recipe(st.session_state.session_id))
             except Exception as e:
                 st.error(GatewayClient.format_error(e))
 
     st.divider()
-    st.markdown("#### Slack fixture (prompt injection)")
-    if st.button("Search #sales-acme"):
+    section("Prompt injection fixture")
+    if st.button("Load Slack #sales-acme"):
         try:
-            r = c.slack_search("slack_channel:sales-acme")
+            r = client().slack_search("slack_channel:sales-acme")
             st.json(r.get("messages", []))
             if r.get("prompt_injection"):
                 st.markdown(
-                    f'<div class="injection-warning">⚠ Prompt injection detected: '
+                    f'<div class="injection-warning">⚠ Injection in tool output (must not affect policy): '
                     f'{r["prompt_injection"]}</div>',
                     unsafe_allow_html=True,
                 )
         except Exception as e:
             st.error(GatewayClient.format_error(e))
 
-
-def page_mcp() -> None:
-    hero("MCP Gateway", "JSON-RPC meta-server — initialize, tools/list, tools/call (RFC-03).")
-
-    token = ensure_token()
-    c = client()
-
-    c1, c2 = st.columns(2)
-
-    with c1:
-        st.markdown("#### initialize")
-        if st.button("MCP initialize", key="mcp_init"):
-            try:
-                r = c.mcp("initialize", {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {},
-                    "clientInfo": {"name": "streamlit-ui", "version": "1.0"},
-                })
-                st.session_state["_mcp_init"] = r
-            except Exception as e:
-                st.error(GatewayClient.format_error(e))
-        if "_mcp_init" in st.session_state:
-            json_block(st.session_state["_mcp_init"]["result"], "Initialize result")
-
-    with c2:
-        st.markdown("#### tools/list")
-        if st.button("List tools (session-scoped)", key="mcp_list"):
-            try:
-                r = c.mcp(
-                    "tools/list",
-                    {"_meta": {
-                        "session_id": st.session_state.session_id,
-                        "agent_id": st.session_state.agent_id,
-                    }},
-                    token=token,
-                    req_id=2,
-                )
-                st.session_state["_mcp_tools"] = r
-            except Exception as e:
-                st.error(GatewayClient.format_error(e))
-        if "_mcp_tools" in st.session_state:
-            tools = st.session_state["_mcp_tools"].get("result", {}).get("tools", [])
-            for t in tools:
-                st.markdown(f"- `{t.get('name')}` — {t.get('description', '')[:60]}…")
-
-    st.divider()
-    st.markdown("#### tools/call")
-    mcp_tool = st.selectbox(
-        "MCP tool",
-        [
-            "auth.preflight_goal",
-            "linear.create_issue",
-            "slack.search_messages",
-            "slack.post_message",
-        ],
-    )
-    resource = st.text_input("Resource / channel", value="linear_team:SALES")
-    if st.button("Call tool (JWT required)", key="mcp_call"):
-        if not token:
-            st.error("Mint JWT first")
-            return
-        args: dict[str, Any] = {
-            "session_id": st.session_state.session_id,
-            "agent_id": st.session_state.agent_id,
-        }
-        if mcp_tool == "slack.search_messages":
-            args["channel"] = resource
-        elif mcp_tool == "linear.create_issue":
-            args["resource_id"] = resource
-            args["title"] = "Acme renewal follow-up"
-        elif mcp_tool == "slack.post_message":
-            args["resource_id"] = resource
-            args["text"] = "demo message"
-        try:
-            r = c.mcp(
-                "tools/call",
-                {"name": mcp_tool, "arguments": args},
-                token=token,
-                req_id=3,
-            )
-            st.session_state["_mcp_call"] = r
-        except Exception as e:
-            st.error(GatewayClient.format_error(e))
-
-    if "_mcp_call" in st.session_state:
-        resp = st.session_state["_mcp_call"]
-        if "error" in resp:
-            st.error(resp["error"])
-        else:
-            result = resp.get("result", {})
-            is_err = result.get("isError", False)
-            text = result.get("content", [{}])[0].get("text", "")
-            try:
-                parsed = json.loads(text)
-                if is_err:
-                    show_decision(parsed.get("decision", "ERROR"), parsed.get("reason"))
-                else:
-                    show_decision(parsed.get("decision", "OK"))
-                st.json(parsed)
-            except json.JSONDecodeError:
-                st.code(text)
-        json_block(resp, "Raw JSON-RPC response")
+    if st.session_state.get("_health"):
+        dev_json(st.session_state["_health"], "Gateway health")
 
 
 def main() -> None:
     st.set_page_config(
-        page_title="ScopeMemory Demo",
+        page_title="ScopeMemory · Policy Console",
         page_icon="🛡",
         layout="wide",
         initial_sidebar_state="expanded",
     )
     inject_css()
     init_session_state(DEFAULTS)
-    sidebar()
 
-    pages = {
-        "Overview": page_overview,
-        "Agentic Identity": page_identity,
-        "Authorization": page_authorization,
-        "Session dashboard": page_session,
-        "Demo scenarios": page_scenarios,
-        "MCP Gateway": page_mcp,
+    try:
+        load_console_data()
+    except Exception:
+        pass
+
+    page = sidebar()
+    product_header()
+
+    routes = {
+        "Policy Console": page_console,
+        "Delegation & Identity": page_delegation,
+        "Tool Authorization": page_authorization,
+        "Human Approvals": page_approvals,
+        "Audit Trail": page_audit,
+        "Advanced": page_advanced,
     }
-
-    choice = st.radio(
-        "Navigate",
-        list(pages.keys()),
-        horizontal=True,
-        label_visibility="collapsed",
-    )
-    st.divider()
-    pages[choice]()
+    routes[page]()
 
 
 if __name__ == "__main__":

@@ -4,3 +4,4 @@ pymysql>=1.1
 fastapi>=0.110
 uvicorn>=0.27
 requests>=2.31
+streamlit>=1.32
