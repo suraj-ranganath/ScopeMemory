@@ -3,5 +3,4 @@ neo4j>=5.0
 pymysql>=1.1
 fastapi>=0.110
 uvicorn>=0.27
-streamlit>=1.32
 requests>=2.31

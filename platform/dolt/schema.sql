@@ -88,7 +88,8 @@ CREATE TABLE IF NOT EXISTS grants (
   reason TEXT,
   ttl_seconds INT NOT NULL DEFAULT 900,
   call_count_remaining INT NOT NULL DEFAULT 1,
-  expires_at TIMESTAMP NULL
+  expires_at TIMESTAMP NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS policy_decisions (
@@ -98,6 +99,10 @@ CREATE TABLE IF NOT EXISTS policy_decisions (
   resource_id VARCHAR(128) NOT NULL,
   decision VARCHAR(64) NOT NULL,
   proof_json LONGTEXT NOT NULL,
+  context_snapshot_id VARCHAR(128),
+  dolt_commit_hash VARCHAR(128) NOT NULL DEFAULT 'demo-fixture',
+  recipe_hits_json LONGTEXT,
+  credential_lease_id VARCHAR(128),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -111,14 +116,17 @@ CREATE TABLE IF NOT EXISTS access_requests (
   request_id VARCHAR(128) PRIMARY KEY,
   session_id VARCHAR(128) NOT NULL,
   user_id VARCHAR(128) NOT NULL,
+  agent_id VARCHAR(128),
   requested_scope VARCHAR(255) NOT NULL,
   requested_resource VARCHAR(128) NOT NULL,
   requested_tool_id VARCHAR(128) NOT NULL,
   reason TEXT NOT NULL,
   recipe_id VARCHAR(128),
+  proof_id VARCHAR(128),
+  approver_type VARCHAR(64) NOT NULL DEFAULT 'human',
+  expires_at TIMESTAMP NULL,
   status VARCHAR(64) NOT NULL DEFAULT 'pending',
   approver_id VARCHAR(128),
-  proof_id VARCHAR(128),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -155,4 +163,52 @@ CREATE TABLE IF NOT EXISTS recipe_index_meta (
   dolt_commit_hash VARCHAR(128) NOT NULL DEFAULT 'main',
   content_hash VARCHAR(128) NOT NULL,
   indexed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS graph_nodes (
+  node_id VARCHAR(128) PRIMARY KEY,
+  node_kind VARCHAR(64) NOT NULL,
+  source_id VARCHAR(128) NOT NULL,
+  label VARCHAR(255),
+  payload_json LONGTEXT NOT NULL,
+  provenance VARCHAR(128) NOT NULL,
+  content_hash VARCHAR(128) NOT NULL,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS graph_edges (
+  edge_id VARCHAR(128) PRIMARY KEY,
+  src_node_id VARCHAR(128) NOT NULL,
+  dst_node_id VARCHAR(128) NOT NULL,
+  edge_kind VARCHAR(64) NOT NULL,
+  payload_json LONGTEXT NOT NULL,
+  confidence DOUBLE NOT NULL DEFAULT 1.0,
+  provenance VARCHAR(128) NOT NULL,
+  content_hash VARCHAR(128) NOT NULL,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS session_recipe_similarity (
+  session_id VARCHAR(128) NOT NULL,
+  recipe_id VARCHAR(128) NOT NULL,
+  score DOUBLE NOT NULL,
+  rank_order INT NOT NULL DEFAULT 1,
+  graph_node_id VARCHAR(128),
+  dolt_commit_hash VARCHAR(128) NOT NULL DEFAULT 'demo-fixture',
+  recipe_index_commit VARCHAR(128) NOT NULL DEFAULT 'demo-fixture',
+  reified TINYINT NOT NULL DEFAULT 1,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (session_id, recipe_id)
+);
+
+CREATE TABLE IF NOT EXISTS session_context_snapshots (
+  snapshot_id VARCHAR(128) PRIMARY KEY,
+  session_id VARCHAR(128) NOT NULL,
+  phase VARCHAR(64) NOT NULL,
+  subgraph_json LONGTEXT NOT NULL,
+  fact_set_hash VARCHAR(128) NOT NULL,
+  policy_decision_id VARCHAR(128),
+  dolt_commit_hash VARCHAR(128) NOT NULL DEFAULT 'demo-fixture',
+  recipe_index_commit VARCHAR(128) NOT NULL DEFAULT 'demo-fixture',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

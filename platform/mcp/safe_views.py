@@ -25,13 +25,13 @@ def explain_denial(decisions: list[dict[str, Any]], decision_id: str | None = No
     for decision in decisions:
         if decision_id and decision.get("decision_id") != decision_id:
             continue
-        if decision.get("decision") == "DENY":
+        if decision_id or decision.get("decision") in {"DENY", "ESCALATE_HUMAN", "REPAIR"}:
             selected = decision
             break
     if selected is None:
         return {
             "found": False,
-            "message": "no denied policy decision found for this session",
+            "message": "no denied, repairable, or escalated policy decision found for this session",
         }
     proof = selected.get("proof_json") if isinstance(selected.get("proof_json"), dict) else {}
     rules = proof.get("rules") or []

@@ -49,18 +49,22 @@ AUTH_TOOLS: list[dict[str, Any]] = [
     ),
     _tool(
         "auth.request_scope",
-        "Create or refresh a human approval request for a policy-gated scope.",
+        "Request authorization for a tool/resource pair without executing the downstream tool.",
         {
             **SESSION_ARGS,
+            "tool_id": {"type": "string", "description": "Downstream tool to authorize"},
             **RESOURCE_ARG,
-            "tool_id": {"type": "string", "description": "Requested downstream MCP tool"},
-            "reason": {"type": "string", "description": "Safe user-facing reason for the request"},
+            "channel": {
+                "type": "string",
+                "description": "Slack channel resource id when requesting slack.search_messages",
+            },
+            "reason": {"type": "string", "description": "User-facing reason for the access request"},
         },
-        ["session_id", "agent_id", "tool_id", "resource_id"],
+        ["session_id", "agent_id", "tool_id"],
     ),
     _tool(
         "auth.explain_denial",
-        "Explain a denied policy decision without exposing secrets.",
+        "Return the latest safe denial or escalation explanation for a session.",
         {
             **SESSION_ARGS,
             "decision_id": {"type": "string", "description": "Optional policy decision id"},
@@ -69,13 +73,14 @@ AUTH_TOOLS: list[dict[str, Any]] = [
     ),
     _tool(
         "auth.submit_workflow_feedback",
-        "Record safe workflow feedback for later recipe review.",
+        "Submit bounded workflow feedback for future recipe/policy tuning.",
         {
             **SESSION_ARGS,
-            "feedback": {"type": "string", "description": "Safe feedback text"},
-            "scenario": {"type": "string", "description": "Optional demo scenario or recipe id"},
+            "decision_id": {"type": "string", "description": "Decision being reviewed"},
+            "outcome": {"type": "string", "description": "accepted, rejected, repaired, or noisy"},
+            "note": {"type": "string", "description": "Safe non-secret feedback note"},
         },
-        ["session_id", "agent_id", "feedback"],
+        ["session_id", "agent_id", "decision_id", "outcome"],
     ),
 ]
 
@@ -107,7 +112,7 @@ DOWNSTREAM_TOOLS: list[dict[str, Any]] = [
         {
             **SESSION_ARGS,
             **RESOURCE_ARG,
-            "issue_id": {"type": "string", "description": "Linear issue id"},
+            "issue_id": {"type": "string", "description": "Issue id"},
             "body": {"type": "string", "description": "Comment body"},
         },
         ["session_id", "agent_id", "resource_id", "issue_id", "body"],

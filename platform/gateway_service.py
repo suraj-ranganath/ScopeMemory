@@ -8,16 +8,19 @@ from agentic_iam import verify_agent_active
 from authorization_checks import AuthorizationCheckService
 from dolt_store import (
     append_session_event,
-    create_ephemeral_grant,
-    create_or_update_access_request,
-    find_active_grant,
+    attach_decision_to_snapshot,
+    create_access_request,
+    find_active_grant_for_tool,
     get_session,
+    issue_ephemeral_grant,
     list_access_requests,
-    list_grants,
+    list_active_grants,
+    record_context_graph,
+    save_context_snapshot,
     save_policy_decision,
+    save_recipe_hits,
 )
 from graph_backend import authorize_context, backend_name, preflight_context, sync_graph
-from mcp.visibility import visible_tools_from_context
 from policy_contracts import Decision, contract_dict, stable_hash
 
 
@@ -36,6 +39,53 @@ def recipe_hits_for_session(session: dict[str, Any], session_id: str) -> tuple[l
     return hits, backend_name()
 
 
+def _commit_from_hits(recipe_hits: list[dict[str, Any]]) -> str:
+    return str(recipe_hits[0].get("dolt_commit") or "demo-fixture") if recipe_hits else "demo-fixture"
+
+
+def _recipe_index_commit_from_hits(recipe_hits: list[dict[str, Any]]) -> str:
+    return (
+        str(recipe_hits[0].get("recipe_index_commit") or recipe_hits[0].get("dolt_commit") or "demo-fixture")
+        if recipe_hits
+        else "demo-fixture"
+    )
+
+
+def _recipe_id_from_ctx(ctx: dict[str, Any]) -> str | None:
+    matched = ctx.get("matched_recipe") or {}
+    if matched:
+        return matched.get("recipe_id") or matched.get("id")
+    path = ctx.get("context_path") or []
+    if len(path) > 1 and str(path[1]).startswith("recipe_"):
+        return str(path[1])
+    return None
+
+
+def _visible_tools_for_preflight(session_id: str, predicted_tools: list[str]) -> list[str]:
+    from dolt_store import connect
+    from mcp.registry import AUTH_TOOL_NAMES, DOWNSTREAM_TOOL_NAMES
+
+    visible = set(AUTH_TOOL_NAMES)
+    visible.update(tool for tool in predicted_tools if tool in DOWNSTREAM_TOOL_NAMES)
+
+    conn = connect()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT ts.tool_id
+            FROM grants g
+            JOIN tool_scopes ts ON ts.scope = g.scope
+            WHERE g.session_id = %s
+              AND g.call_count_remaining > 0
+              AND (g.expires_at IS NULL OR g.expires_at > NOW())
+            """,
+            (session_id,),
+        )
+        visible.update(row["tool_id"] for row in cur.fetchall() if row["tool_id"] in DOWNSTREAM_TOOL_NAMES)
+    conn.close()
+    return sorted(visible)
+
+
 def run_preflight(session_id: str, agent_id: str, jwt_claims: dict[str, Any]) -> dict[str, Any]:
     session = get_session(session_id)
     if not session:
@@ -44,21 +94,58 @@ def run_preflight(session_id: str, agent_id: str, jwt_claims: dict[str, Any]) ->
     if session["agent_id"] != agent_id:
         raise ValueError("agent does not match session")
 
-    rows, engine = sync_graph()
-    ctx = preflight_context(session_id)
-    recipe_hits, retrieval_engine = recipe_hits_for_session(session, session_id)
-    access_requests = list_access_requests(session_id)
-    grants = list_grants(session_id, active_only=True)
-    preflight_event = append_session_event(
+    append_session_event(
         session_id,
         "preflight_requested",
         {
             "agent_id": agent_id,
-            "predicted_tools": ctx.get("predicted_tools", []),
-            "predicted_scopes": ctx.get("predicted_scopes", []),
+            "delegation_jwt_verified": True,
+            "user_id": jwt_claims.get("user_id"),
+        },
+    )
+    rows, engine = sync_graph()
+    ctx = preflight_context(session_id)
+    recipe_hits, retrieval_engine = recipe_hits_for_session(session, session_id)
+    persisted_hits = save_recipe_hits(session_id, recipe_hits)
+    snapshot_payload = {
+        "phase": "preflight",
+        "session_id": session_id,
+        "graph_context": ctx,
+        "recipe_hits": recipe_hits,
+        "delegation_jwt": {
+            "verified": True,
+            "session_id": jwt_claims.get("session_id"),
+            "user_id": jwt_claims.get("user_id"),
+            "legacy": jwt_claims.get("legacy", False),
+        },
+    }
+    snapshot = save_context_snapshot(
+        session_id,
+        "preflight",
+        snapshot_payload,
+        dolt_commit_hash=_commit_from_hits(recipe_hits),
+        recipe_index_commit=_recipe_index_commit_from_hits(recipe_hits),
+    )
+    graph_projection = record_context_graph(
+        session_id,
+        "preflight",
+        ctx,
+        recipe_hits=recipe_hits,
+        snapshot_id=snapshot["snapshot_id"],
+    )
+    append_session_event(
+        session_id,
+        "preflight_completed",
+        {
+            "snapshot_id": snapshot["snapshot_id"],
+            "recipe_hits": [h.get("recipe_id") for h in recipe_hits],
+            "query_engine": engine,
             "recipe_retrieval": retrieval_engine,
         },
     )
+    active_grants = list_active_grants(session_id)
+    access_requests = list_access_requests(session_id)
+    visible_tools = _visible_tools_for_preflight(session_id, ctx.get("predicted_tools") or [])
     identity = {
         "identity_ref": agent["identity_ref"],
         "trust_score": agent["trust_score"],
@@ -84,18 +171,18 @@ def run_preflight(session_id: str, agent_id: str, jwt_claims: dict[str, Any]) ->
         "source_of_truth": "dolt",
         "query_engine": engine,
         "synced_rows": rows,
-        "recipe_hits": recipe_hits,
-        "recipe_retrieval": retrieval_engine,
-        "visible_tools": visible_tools_from_context(ctx, access_requests, grants),
-        "human_required_requests": [
+        "context_snapshot_id": snapshot["snapshot_id"],
+        "fact_set_hash": snapshot["fact_set_hash"],
+        "graph_projection": graph_projection,
+        "visible_tools": visible_tools,
+        "active_grants": active_grants,
+        "access_requests": access_requests,
+        "pending_access_requests": [
             req for req in access_requests if req.get("status") == "pending"
         ],
-        "approved_grants": grants,
-        "audit_event": {
-            "event_id": preflight_event["event_id"],
-            "event_hash": preflight_event["event_hash"],
-            "prev_event_hash": preflight_event["prev_event_hash"],
-        },
+        "recipe_hits": recipe_hits,
+        "reified_recipe_hits": persisted_hits,
+        "recipe_retrieval": retrieval_engine,
         **ctx,
     }
 
@@ -115,9 +202,48 @@ def run_authorize(
         raise ValueError("agent does not match session")
 
     sync_graph()
+    recipe_hits, retrieval_engine = recipe_hits_for_session(session, session_id)
+    save_recipe_hits(session_id, recipe_hits)
+    sync_graph()
     ctx = authorize_context(session_id, tool_id, resource_id)
     if "error" in ctx:
         raise ValueError(ctx["error"])
+    snapshot_payload = {
+        "phase": "authorize",
+        "session_id": session_id,
+        "tool_id": tool_id,
+        "resource_id": resource_id,
+        "graph_context": ctx,
+        "recipe_hits": recipe_hits,
+    }
+    snapshot = save_context_snapshot(
+        session_id,
+        "authorize",
+        snapshot_payload,
+        dolt_commit_hash=_commit_from_hits(recipe_hits),
+        recipe_index_commit=_recipe_index_commit_from_hits(recipe_hits),
+    )
+    facts = dict(ctx.get("facts") or {})
+    facts.update({
+        "context_snapshot_present": True,
+        "context_snapshot_id": snapshot["snapshot_id"],
+        "dolt_commit": snapshot["dolt_commit_hash"],
+        "recipe_index_commit": snapshot["recipe_index_commit"],
+    })
+    ctx = {
+        **ctx,
+        "facts": facts,
+        "context_snapshot_id": snapshot["snapshot_id"],
+        "dolt_commit": snapshot["dolt_commit_hash"],
+        "recipe_index_commit": snapshot["recipe_index_commit"],
+    }
+    graph_projection = record_context_graph(
+        session_id,
+        "authorize",
+        ctx,
+        recipe_hits=recipe_hits,
+        snapshot_id=snapshot["snapshot_id"],
+    )
 
     idempotency_key = _idempotency_key(ctx)
     append_session_event(
@@ -126,6 +252,7 @@ def run_authorize(
         {
             "tool_id": tool_id,
             "resource_id": resource_id,
+            "snapshot_id": snapshot["snapshot_id"],
             "idempotency_key": idempotency_key,
         },
     )
@@ -136,10 +263,16 @@ def run_authorize(
 
     proof = {
         **contract_dict(policy_decision.proof),
+        "check_id": check.check_id,
+        "check_state": check.state.value,
         "context_path": ctx["context_path"],
+        "context_snapshot_id": snapshot["snapshot_id"],
+        "fact_set_hash": snapshot["fact_set_hash"],
         "rebac_tuples": ctx["rebac_tuples"],
         "memgraph_facts": ctx["facts"],
         "cozo_facts": policy_decision.proof.facts,
+        "graph_projection": graph_projection,
+        "recipe_retrieval": retrieval_engine,
         "delegation_jwt": {
             "verified": True,
             "user_id": jwt_claims.get("user_id"),
@@ -154,50 +287,62 @@ def run_authorize(
         resource_id,
         policy_decision.decision.value,
         proof,
+        context_snapshot_id=snapshot["snapshot_id"],
+        dolt_commit_hash=snapshot["dolt_commit_hash"],
+        recipe_hits=recipe_hits,
+        credential_lease_id=(
+            policy_decision.credential_lease.lease_id
+            if policy_decision.credential_lease
+            else None
+        ),
     )
-    access_request = None
-    grant = None
-    if policy_decision.decision == Decision.ESCALATE_HUMAN:
-        access_request = create_or_update_access_request(
-            session_id=session_id,
-            user_id=session["user_id"],
-            tool_id=tool_id,
-            scope=policy_decision.required_scope,
-            resource_id=resource_id,
-            reason=policy_decision.reason,
-            recipe_id=_recipe_id_from_context(ctx),
-            proof_id=policy_decision.proof.proof_hash,
-        )
-    elif policy_decision.decision == Decision.AUTO_APPROVE_EPHEMERAL_GRANT:
-        grant = create_ephemeral_grant(
-            session_id=session_id,
-            scope=policy_decision.required_scope,
-            resource_id=resource_id,
-            issuer="policy",
-            proof_id=policy_decision.proof.proof_hash,
-            reason=policy_decision.reason,
-            ttl_seconds=900,
-            call_count_remaining=1,
-        )
-    elif policy_decision.decision == Decision.ALLOW:
-        grant = find_active_grant(session_id, policy_decision.required_scope, resource_id)
-
-    event = append_session_event(
+    attach_decision_to_snapshot(snapshot["snapshot_id"], decision_id)
+    append_session_event(
         session_id,
-        "policy_decision",
+        "policy_decision_recorded",
         {
             "decision_id": decision_id,
             "check_id": check.check_id,
+            "check_state": check.state.value,
+            "decision": policy_decision.decision.value,
             "tool_id": tool_id,
             "resource_id": resource_id,
-            "decision": policy_decision.decision.value,
-            "proof_id": policy_decision.proof.proof_hash,
-            "access_request_id": access_request.get("request_id") if access_request else "",
-            "grant_id": grant.get("grant_id") if grant else "",
+            "snapshot_id": snapshot["snapshot_id"],
+            "proof_hash": policy_decision.proof.proof_hash,
         },
     )
 
-    result = {
+    grant = None
+    access_request = None
+    if policy_decision.decision == Decision.AUTO_APPROVE_EPHEMERAL_GRANT:
+        grant = issue_ephemeral_grant(
+            session_id,
+            policy_decision.required_scope or facts.get("scope", ""),
+            resource_id,
+            issuer="policy:auto_approve",
+            proof_id=policy_decision.proof.proof_hash,
+            reason=policy_decision.reason,
+        )
+        try:
+            sync_graph()
+        except Exception:
+            pass
+    elif policy_decision.decision == Decision.ESCALATE_HUMAN:
+        access_request = create_access_request(
+            session_id=session_id,
+            user_id=str(facts.get("user_id") or session["user_id"]),
+            agent_id=str(facts.get("agent_id") or agent_id),
+            requested_scope=policy_decision.required_scope or str(facts.get("scope") or ""),
+            requested_resource=resource_id,
+            requested_tool_id=tool_id,
+            reason=policy_decision.reason,
+            recipe_id=_recipe_id_from_ctx(ctx),
+            proof_id=policy_decision.proof.proof_hash,
+        )
+    elif policy_decision.decision == Decision.ALLOW:
+        grant = find_active_grant_for_tool(session_id, tool_id, resource_id)
+
+    return {
         "decision_id": decision_id,
         "check_id": check.check_id,
         "check_state": check.state.value,
@@ -206,17 +351,13 @@ def run_authorize(
         "reason": policy_decision.reason,
         "proof": proof,
         "audit_store": "dolt",
-        "audit_event": {
-            "event_id": event["event_id"],
-            "event_hash": event["event_hash"],
-            "prev_event_hash": event["prev_event_hash"],
-        },
+        "context_snapshot_id": snapshot["snapshot_id"],
+        "fact_set_hash": snapshot["fact_set_hash"],
+        "graph_projection": graph_projection,
+        "recipe_retrieval": retrieval_engine,
+        "grant": grant,
+        "access_request": access_request,
     }
-    if access_request:
-        result["access_request"] = access_request
-    if grant:
-        result["grant"] = grant
-    return result
 
 
 def list_policy_decisions(session_id: str) -> list[dict[str, Any]]:
@@ -245,15 +386,11 @@ def list_policy_decisions(session_id: str) -> list[dict[str, Any]]:
 def _idempotency_key(ctx: dict[str, Any]) -> str:
     facts = ctx.get("facts") or {}
     return stable_hash({
-        "session_id": ctx.get("session_id"),
-        "tool_id": ctx.get("tool_id"),
-        "resource_id": ctx.get("resource_id"),
-        "grant_present": facts.get("grant_present"),
+        "session_id": ctx.get("session_id") or facts.get("session_id"),
+        "tool_id": ctx.get("tool_id") or facts.get("tool_id"),
+        "resource_id": ctx.get("resource_id") or facts.get("resource_id"),
         "scope": facts.get("scope"),
-        "scope_approval_mode": facts.get("scope_approval_mode"),
+        "grant_present": facts.get("grant_present"),
+        "context_path": ctx.get("context_path") or [],
+        "recipe_index_commit": ctx.get("recipe_index_commit") or facts.get("recipe_index_commit"),
     })
-
-
-def _recipe_id_from_context(ctx: dict[str, Any]) -> str:
-    path = ctx.get("context_path") or []
-    return str(path[1]) if len(path) > 1 else ""

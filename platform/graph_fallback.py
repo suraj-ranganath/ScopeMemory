@@ -23,8 +23,23 @@ class InMemoryGraph:
             return {"error": "session not found", "session_id": session_id}
         agents = {r["agent_id"]: r for r in self.data.get("agents", [])}
         delegations = {r["session_id"]: r for r in self.data.get("delegations", [])}
-        recipes = [r for r in self.data.get("workflow_recipes", []) if r["goal_class"] == s["goal_class"] and r["team_id"] == s["team_id"]]
-        recipe = recipes[0] if recipes else None
+        recipes_by_id = {r["recipe_id"]: r for r in self.data.get("workflow_recipes", [])}
+        similarity_rows = sorted(
+            [
+                r for r in self.data.get("session_recipe_similarity", [])
+                if r["session_id"] == session_id and bool(r.get("reified", True))
+            ],
+            key=lambda r: (int(r.get("rank_order", 99)), -float(r.get("score", 0))),
+        )
+        recipe = None
+        if similarity_rows:
+            recipe = recipes_by_id.get(similarity_rows[0]["recipe_id"])
+        if not recipe:
+            recipes = [
+                r for r in self.data.get("workflow_recipes", [])
+                if r["goal_class"] == s["goal_class"] and r["team_id"] == s["team_id"]
+            ]
+            recipe = recipes[0] if recipes else None
         tools, scopes = [], []
         if recipe:
             tools = [r["tool_id"] for r in self.data.get("recipe_tools", []) if r["recipe_id"] == recipe["recipe_id"]]
@@ -80,6 +95,13 @@ class InMemoryGraph:
         )
         agents = {r["agent_id"]: r for r in self.data.get("agents", [])}
         agent = agents.get(s["agent_id"])
+        similarity = next(
+            (
+                r for r in self.data.get("session_recipe_similarity", [])
+                if recipe and r["session_id"] == session_id and r["recipe_id"] == recipe["recipe_id"]
+            ),
+            None,
+        )
         facts = {
             "session_id": session_id,
             "tool_id": tool_id,
@@ -99,8 +121,8 @@ class InMemoryGraph:
             "access_kind": ts["access_kind"],
             "scope_approval_mode": scope_mode,
             "agent_trust_score": agent.get("trust_score") if agent else None,
-            "similarity_score": 1.0 if recipe else 0.0,
-            "similarity_reified": True,
+            "similarity_score": float(similarity["score"]) if similarity else (1.0 if recipe else 0.0),
+            "similarity_reified": bool(similarity.get("reified", True)) if similarity else True,
         }
         context_path = [
             session_id,

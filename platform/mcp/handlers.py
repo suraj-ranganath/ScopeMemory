@@ -1,4 +1,4 @@
-"""MCP tool/call handlers — JWT-gated authorization + mock downstream execution."""
+"""MCP tool/call handlers with policy-bound downstream execution."""
 
 from __future__ import annotations
 
@@ -7,16 +7,11 @@ from typing import Any
 from fastapi import HTTPException
 
 from agentic_identity.auth import resolve_delegation_token
-from dolt_store import append_session_event, consume_grant, list_access_requests, list_grants
-from gateway_service import (
-    list_policy_decisions,
-    run_authorize,
-    run_preflight,
-)
+from dolt_store import append_session_event, connect, consume_grant_for_tool
+from gateway_service import list_policy_decisions, run_authorize, run_preflight
 from mcp.protocol import MCP_AUTH_REQUIRED, MCP_POLICY_DENIED, tool_result_text
-from mcp.registry import DOWNSTREAM_TOOL_NAMES
+from mcp.registry import AUTH_TOOL_NAMES, DOWNSTREAM_TOOL_NAMES
 from mcp.safe_views import explain_denial, redact_decision_rows
-from mcp.visibility import visible_tools_from_context
 from person_b.slack_fixtures import search_slack
 from runtime_execution import (
     RuntimeExecutionError,
@@ -65,11 +60,15 @@ def visible_tools_for_session(session_id: str, agent_id: str, authorization: str
     from graph_backend import preflight_context
 
     ctx = preflight_context(session_id)
-    return visible_tools_from_context(
-        ctx,
-        list_access_requests(session_id),
-        list_grants(session_id, active_only=True),
-    )
+    predicted = set(ctx.get("predicted_tools") or [])
+    visible = set(AUTH_TOOL_NAMES)
+    for tool in predicted:
+        if tool in DOWNSTREAM_TOOL_NAMES:
+            visible.add(tool)
+    for tool in _granted_tools_for_session(session_id):
+        if tool in DOWNSTREAM_TOOL_NAMES:
+            visible.add(tool)
+    return sorted(visible)
 
 
 def handle_tool_call(
@@ -85,31 +84,31 @@ def handle_tool_call(
         return tool_result_text(run_preflight(session_id, agent_id, claims))
 
     if name == "auth.show_decision_proof":
-        decisions = list_policy_decisions(session_id)
+        decisions = redact_decision_rows(list_policy_decisions(session_id))
         decision_id = args.get("decision_id")
         if decision_id:
-            decisions = [d for d in decisions if d.get("decision_id") == decision_id]
-        return tool_result_text({"session_id": session_id, "decisions": redact_decision_rows(decisions)})
+            decisions = [row for row in decisions if row.get("decision_id") == decision_id]
+        return tool_result_text({"session_id": session_id, "decisions": decisions})
 
     if name == "auth.request_scope":
-        tool_id = args.get("tool_id")
-        if tool_id not in DOWNSTREAM_TOOL_NAMES:
-            raise McpHandlerError(MCP_POLICY_DENIED, "known downstream tool_id required")
-        resource_id = _resource_for_tool(tool_id, args)
-        auth = run_authorize(session_id, agent_id, tool_id, resource_id, claims)
+        requested_tool = args.get("tool_id")
+        if not requested_tool:
+            raise McpHandlerError(MCP_POLICY_DENIED, "tool_id required")
+        if requested_tool not in DOWNSTREAM_TOOL_NAMES:
+            raise McpHandlerError(MCP_POLICY_DENIED, f"unknown downstream tool: {requested_tool}")
+        resource_id = _resource_for_tool(requested_tool, args)
+        auth = run_authorize(session_id, agent_id, requested_tool, resource_id, claims)
         return tool_result_text(
             {
-                "session_id": session_id,
-                "tool_id": tool_id,
-                "resource_id": resource_id,
                 "decision": auth["decision"],
                 "decision_id": auth["decision_id"],
-                "check_id": auth["check_id"],
-                "check_state": auth["check_state"],
-                "reason": args.get("reason") or auth["reason"],
+                "check_id": auth.get("check_id"),
+                "check_state": auth.get("check_state"),
+                "proof_id": auth.get("proof_id"),
+                "reason": auth["reason"],
                 "access_request": auth.get("access_request"),
                 "grant": auth.get("grant"),
-                "proof_id": auth["proof_id"],
+                "proof_summary": _proof_summary(auth),
             },
             is_error=auth["decision"] in {"DENY", "REPAIR"},
         )
@@ -123,17 +122,17 @@ def handle_tool_call(
             session_id,
             "workflow_feedback_submitted",
             {
+                "decision_id": args.get("decision_id", ""),
+                "outcome": args.get("outcome", ""),
+                "note": args.get("note", ""),
                 "agent_id": agent_id,
-                "feedback": args.get("feedback", ""),
-                "scenario": args.get("scenario", ""),
             },
         )
         return tool_result_text(
             {
-                "session_id": session_id,
+                "accepted": True,
                 "event_id": event["event_id"],
                 "event_hash": event["event_hash"],
-                "recorded": True,
             }
         )
 
@@ -144,63 +143,63 @@ def handle_tool_call(
     if repair:
         append_session_event(
             session_id,
-            "tool_call_repair_returned",
-            {
-                "tool_id": name,
-                "missing_arguments": repair["missing_arguments"],
-                "safe_guidance": repair["safe_guidance"],
-            },
+            "tool_call_repair_requested",
+            {"tool_id": name, "missing_arguments": repair.get("missing_arguments", [])},
         )
-        return tool_result_text(
-            {
-                **repair,
-                "tool_id": name,
-                "session_id": session_id,
-                "check_state": "repairable",
-            },
-            is_error=True,
-        )
+        return tool_result_text(repair, is_error=True)
 
     resource_id = _resource_for_tool(name, args)
+    tool_intent = tool_intent_for(name, args, resource_id)
     append_session_event(
         session_id,
         "tool_call_requested",
-        {
-            "tool_id": name,
-            "resource_id": resource_id,
-            "tool_intent": tool_intent_for(name, args, resource_id),
-        },
+        {"tool_id": name, "resource_id": resource_id, "tool_intent": tool_intent},
     )
     auth = run_authorize(session_id, agent_id, name, resource_id, claims)
     decision = auth["decision"]
 
     if decision in {"ALLOW", "AUTO_APPROVE_EPHEMERAL_GRANT"}:
+        consumed_grant = consume_grant_for_tool(
+            session_id,
+            name,
+            resource_id,
+            decision_id=auth["decision_id"],
+        )
+        if not consumed_grant:
+            raise McpHandlerError(
+                MCP_POLICY_DENIED,
+                "policy allowed execution but no live grant was available",
+                {
+                    "decision_id": auth["decision_id"],
+                    "check_id": auth.get("check_id"),
+                    "tool_id": name,
+                    "resource_id": resource_id,
+                },
+            )
+        execution_auth = {**auth, "grant": auth.get("grant") or consumed_grant}
         try:
             execution = execute_downstream_tool(
                 tool_id=name,
                 args=args,
                 resource_id=resource_id,
-                authorization=auth,
+                authorization=execution_auth,
                 audit_writer=append_session_event,
-                grant_consumer=consume_grant,
                 slack_searcher=search_slack,
             )
         except RuntimeExecutionError as e:
-            raise McpHandlerError(MCP_POLICY_DENIED, str(e)) from e
+            raise McpHandlerError(MCP_POLICY_DENIED, str(e), {"decision_id": auth["decision_id"]}) from e
         return tool_result_text(
             {
                 "decision": decision,
                 "decision_id": auth["decision_id"],
-                "check_id": auth["check_id"],
-                "check_state": auth["check_state"],
-                "proof_id": auth["proof_id"],
-                "grant": auth.get("grant"),
-                "tool_intent": tool_intent_for(name, args, resource_id),
+                "check_id": auth.get("check_id"),
+                "check_state": auth.get("check_state"),
+                "proof_id": auth.get("proof_id"),
+                "grant": auth.get("grant") or consumed_grant,
+                "consumed_grant": consumed_grant,
+                "tool_intent": tool_intent,
                 "execution": execution,
-                "proof_summary": {
-                    "context_path": auth["proof"]["context_path"],
-                    "rules": auth["proof"]["rules"],
-                },
+                "proof_summary": _proof_summary(auth),
             },
         )
 
@@ -210,29 +209,66 @@ def handle_tool_call(
         {
             "tool_id": name,
             "resource_id": resource_id,
-            "decision": decision,
             "decision_id": auth["decision_id"],
-            "proof_id": auth["proof_id"],
+            "check_id": auth.get("check_id"),
+            "decision": decision,
+            "error": _error_for_decision(decision),
         },
     )
     return tool_result_text(
         {
-            "error": "scope_required" if decision == "ESCALATE_HUMAN" else "policy_denied",
+            "error": _error_for_decision(decision),
             "decision": decision,
             "reason": auth["reason"],
             "decision_id": auth["decision_id"],
-            "check_id": auth["check_id"],
-            "check_state": auth["check_state"],
-            "proof_id": auth["proof_id"],
+            "check_id": auth.get("check_id"),
+            "check_state": auth.get("check_state"),
+            "proof_id": auth.get("proof_id"),
             "access_request": auth.get("access_request"),
-            "tool_intent": tool_intent_for(name, args, resource_id),
-            "proof_summary": {
-                "context_path": auth["proof"]["context_path"],
-                "rules": auth["proof"]["rules"],
-            },
+            "proof_summary": _proof_summary(auth),
         },
         is_error=True,
     )
+
+
+def _granted_tools_for_session(session_id: str) -> set[str]:
+    conn = connect()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT ts.tool_id
+            FROM grants g
+            JOIN tool_scopes ts ON ts.scope = g.scope
+            WHERE g.session_id = %s
+              AND g.call_count_remaining > 0
+              AND (g.expires_at IS NULL OR g.expires_at > NOW())
+            """,
+            (session_id,),
+        )
+        rows = cur.fetchall()
+    conn.close()
+    return {row["tool_id"] for row in rows}
+
+
+def _proof_summary(auth: dict[str, Any]) -> dict[str, Any]:
+    proof = auth.get("proof") or {}
+    return {
+        "check_id": auth.get("check_id") or proof.get("check_id", ""),
+        "check_state": auth.get("check_state") or proof.get("check_state", ""),
+        "proof_id": auth.get("proof_id", ""),
+        "context_path": proof.get("context_path", []),
+        "context_snapshot_id": proof.get("context_snapshot_id") or auth.get("context_snapshot_id"),
+        "fact_set_hash": proof.get("fact_set_hash") or auth.get("fact_set_hash"),
+        "rules": proof.get("rules", []),
+    }
+
+
+def _error_for_decision(decision: str) -> str:
+    if decision == "ESCALATE_HUMAN":
+        return "scope_required"
+    if decision == "REPAIR":
+        return "repair_required"
+    return "policy_denied"
 
 
 def _resource_for_tool(tool_id: str, args: dict[str, Any]) -> str:
@@ -240,8 +276,8 @@ def _resource_for_tool(tool_id: str, args: dict[str, Any]) -> str:
         channel = args.get("channel") or args.get("resource_id")
         if not channel:
             raise McpHandlerError(MCP_POLICY_DENIED, "channel required for slack.search_messages")
-        return channel
+        return str(channel)
     resource_id = args.get("resource_id")
     if not resource_id:
         raise McpHandlerError(MCP_POLICY_DENIED, "resource_id required")
-    return resource_id
+    return str(resource_id)
