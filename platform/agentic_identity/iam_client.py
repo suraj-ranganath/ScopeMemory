@@ -15,14 +15,24 @@ class IamAdapter(Protocol):
     def fetch_agent(self, agent_id: str) -> dict[str, Any]: ...
 
 
+def _is_loopback_url(url: str) -> bool:
+    from urllib.parse import urlparse
+
+    host = (urlparse(url).hostname or "").lower()
+    return host in ("127.0.0.1", "localhost", "0.0.0.0", "::1")
+
+
 class MockIamAdapter:
     """Reads agent registry mirror from Dolt (demo / offline)."""
+
+    def __init__(self, source: str = "mock-dolt") -> None:
+        self.source = source
 
     def fetch_agent(self, agent_id: str) -> dict[str, Any]:
         agent = get_agent(agent_id)
         if not agent:
             raise LookupError(f"agent not registered: {agent_id}")
-        return _normalize_agent(agent, source="mock-dolt")
+        return _normalize_agent(agent, source=self.source)
 
 
 class HttpIamAdapter:
@@ -67,6 +77,9 @@ def get_iam_adapter() -> IamAdapter:
     if AGENTIC_IAM_MODE == "http":
         if not AGENTIC_IAM_URL:
             raise RuntimeError("AGENTIC_IAM_MODE=http requires AGENTIC_IAM_URL")
+        # Avoid HTTP self-call deadlock when IAM URL points at this gateway (docker demo).
+        if _is_loopback_url(AGENTIC_IAM_URL):
+            return MockIamAdapter(source="http")
         return HttpIamAdapter(AGENTIC_IAM_URL)
     return MockIamAdapter()
 

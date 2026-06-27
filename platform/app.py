@@ -16,16 +16,16 @@ from pydantic import BaseModel
 from agentic_iam import mock_router, router as iam_router, verify_agent_active
 from agentic_identity.auth import resolve_delegation_token
 from config import AGENTIC_IAM_MODE, DELEGATION_JWT_REQUIRED
-from cozo_policy import evaluate, export_facts
 from dolt_store import (
     approve_access_request,
     get_session,
     init_schema,
     list_access_requests,
-    save_policy_decision,
     seed_demo,
 )
-from graph_backend import authorize_context, backend_name, preflight_context, sync_graph
+from gateway_service import run_authorize, run_preflight
+from graph_backend import backend_name, sync_graph
+from mcp.router import router as mcp_router
 
 WEB_DIR = Path(__file__).parent / "web"
 FIXTURES_DIR = Path(__file__).parent / "person_b" / "fixtures"
@@ -67,18 +67,13 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="ScopeMemory Gateway", lifespan=lifespan)
 app.include_router(iam_router)
 app.include_router(mock_router)
+app.include_router(mcp_router)
 app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
 
 
 def _recipe_hits_for_session(session: dict[str, Any], session_id: str) -> tuple[list[dict[str, Any]], str]:
-    from graph_backend import backend_name, search_recipe_hits
-    hits = search_recipe_hits(
-        team_id=session["team_id"],
-        goal_class=session["goal_class"],
-        goal_text=session["goal"],
-        session_id=session_id,
-    )
-    return hits, backend_name()
+    from gateway_service import recipe_hits_for_session
+    return recipe_hits_for_session(session, session_id)
 
 
 class PreflightRequest(BaseModel):
@@ -99,11 +94,12 @@ class AuthorizeRequest(BaseModel):
 def health() -> dict[str, str]:
     return {
         "status": "ok",
-        "stack": "dolt+graph+policy",
+        "stack": "dolt+graph+policy+mcp",
         "graph_backend": backend_name(),
         "recipe_retrieval": backend_name(),
         "iam_mode": AGENTIC_IAM_MODE,
         "delegation_jwt_required": str(DELEGATION_JWT_REQUIRED).lower(),
+        "mcp_endpoint": "/mcp",
     }
 
 
@@ -128,38 +124,8 @@ def preflight(
         req.session_id, req.agent_id, req.delegation_token, authorization,
     )
 
-    rows, engine = sync_graph()
-    ctx = preflight_context(req.session_id)
-    recipe_hits, retrieval_engine = _recipe_hits_for_session(session, req.session_id)
-    identity = {
-        "identity_ref": agent["identity_ref"],
-        "trust_score": agent["trust_score"],
-        "delegation_required": True,
-        "delegation_verified": True,
-        "iam_source": agent.get("source", AGENTIC_IAM_MODE),
-    }
-    return {
-        "session_id": req.session_id,
-        "agentic_iam": {
-            "agent_id": agent["agent_id"],
-            "identity_ref": agent["identity_ref"],
-            "trust_score": agent["trust_score"],
-            "source": agent.get("source"),
-        },
-        "delegation_jwt": {
-            "verified": True,
-            "session_id": jwt_claims.get("session_id"),
-            "user_id": jwt_claims.get("user_id"),
-            "legacy": jwt_claims.get("legacy", False),
-        },
-        "agentic_identity": identity,
-        "source_of_truth": "dolt",
-        "query_engine": engine,
-        "synced_rows": rows,
-        "recipe_hits": recipe_hits,
-        "recipe_retrieval": retrieval_engine,
-        **ctx,
-    }
+    result = run_preflight(req.session_id, req.agent_id, jwt_claims)
+    return result
 
 
 @app.post("/auth/authorize")
@@ -178,61 +144,18 @@ def authorize(
         req.session_id, req.agent_id, req.delegation_token, authorization,
     )
 
-    sync_graph()
-    ctx = authorize_context(req.session_id, req.tool_id, req.resource_id)
-    if "error" in ctx:
-        raise HTTPException(404, ctx["error"])
-
-    decision, reason, rules = evaluate(ctx["facts"])
-    cozo_facts = export_facts(ctx["facts"])
-
-    proof = {
-        "decision": decision,
-        "reason": reason,
-        "context_path": ctx["context_path"],
-        "rebac_tuples": ctx["rebac_tuples"],
-        "memgraph_facts": ctx["facts"],
-        "cozo_facts": cozo_facts,
-        "rules": rules,
-        "policy_engine": "deterministic-rules",
-        "delegation_jwt": {
-            "verified": True,
-            "user_id": jwt_claims.get("user_id"),
-            "identity_ref": jwt_claims.get("identity_ref"),
-            "legacy": jwt_claims.get("legacy", False),
-        },
-    }
-
-    decision_id = save_policy_decision(
-        req.session_id, req.tool_id, req.resource_id, decision, proof,
-    )
-
-    return {
-        "decision_id": decision_id,
-        "decision": decision,
-        "reason": reason,
-        "proof": proof,
-        "audit_store": "dolt",
-    }
+    try:
+        return run_authorize(
+            req.session_id, req.agent_id, req.tool_id, req.resource_id, jwt_claims,
+        )
+    except ValueError as e:
+        raise HTTPException(404, str(e)) from e
 
 
 @app.get("/auth/proof/{session_id}")
 def get_proof(session_id: str) -> dict[str, Any]:
-    import pymysql
-    from config import DOLT_DATABASE, DOLT_HOST, DOLT_PASSWORD, DOLT_PORT, DOLT_USER
-    from pymysql.cursors import DictCursor
-
-    conn = pymysql.connect(
-        host=DOLT_HOST, port=DOLT_PORT, user=DOLT_USER, password=DOLT_PASSWORD,
-        database=DOLT_DATABASE, cursorclass=DictCursor,
-    )
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT * FROM policy_decisions WHERE session_id = %s ORDER BY created_at DESC",
-            (session_id,),
-        )
-        rows = cur.fetchall()
-    conn.close()
+    from gateway_service import list_policy_decisions
+    rows = list_policy_decisions(session_id)
     return {"session_id": session_id, "decisions": rows}
 
 

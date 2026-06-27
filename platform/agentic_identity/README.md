@@ -72,6 +72,6 @@ python3 run_agentic_identity_demo.py
 
 ## Next
 
+- Streamable HTTP / SSE MCP transport
+- Real downstream MCP proxy (RFC-04 credential broker)
 - RS256 / JWKS from real Agentic-IAM
-- OAuth for human approvers
-- MCP gateway passes JWT on tool calls

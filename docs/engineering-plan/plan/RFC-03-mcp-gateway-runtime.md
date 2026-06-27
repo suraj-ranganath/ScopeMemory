@@ -2,7 +2,7 @@
 
 ## Status
 
-Plan ready for implementation authorization.
+**Implemented (Priority 3):** JSON-RPC over HTTP at `POST /mcp` — `initialize`, `tools/list`, `tools/call` with delegation JWT on every tool invocation.
 
 ## Gateway Role
 

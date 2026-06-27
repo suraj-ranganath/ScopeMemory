@@ -2,12 +2,12 @@
 
 ## Current Phase
 
-**Platform demo + Agentic Identity integration (RFC-08).**
+**Platform demo + Agentic Identity (RFC-08) + MCP gateway (RFC-03).**
 
 Runnable stacks:
 
 - `demo/` — SQLite RFC-07 (2-hour story)
-- `platform/` — Dolt + Memgraph + Gateway + Person B UI + Agentic Identity APIs
+- `platform/` — Dolt + Memgraph + Gateway + MCP JSON-RPC + Person B UI
 
 ## Verification
 
@@ -15,6 +15,7 @@ Runnable stacks:
 cd demo && python3 run_demo.py all
 cd platform && python3 run_agentic_identity_demo.py
 cd platform && python3 run_person_b_demo.py all
+cd platform && python3 run_mcp_demo.py
 ```
 
 ## Route
@@ -32,6 +33,6 @@ cd platform && python3 run_person_b_demo.py all
 
 ## Next Step
 
-1. Run `python3 platform/run_agentic_identity_demo.py`
-2. Signed delegation tokens + live Agentic-IAM HTTP adapter
-3. MCP JSON-RPC gateway (RFC-03)
+1. Run `python3 platform/run_mcp_demo.py`
+2. Credential broker + 1Password (RFC-04)
+3. Production hardening (approver auth, CI, RS256/JWKS)

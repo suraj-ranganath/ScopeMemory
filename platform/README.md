@@ -130,6 +130,17 @@ python3 run_agentic_identity_demo.py
 
 See `agentic_identity/README.md` and `docs/engineering-plan/plan/RFC-08-agentic-identity-integration.md`.
 
+## MCP gateway demo (RFC-03)
+
+JSON-RPC meta-server with JWT on `tools/call`:
+
+```bash
+docker compose --profile gateway-docker up -d --build
+python3 run_mcp_demo.py
+```
+
+See `mcp/README.md`.
+
 See `person_b/README.md` for contracts, fixtures, and demo paths.
 
 ## Phase 2
@@ -137,4 +148,4 @@ See `person_b/README.md` for contracts, fixtures, and demo paths.
 - Swap policy evaluator to embedded CozoDB Datalog (optional; current demo uses `cozo_policy.py`)
 - Connect live Agentic-IAM API instead of mock
 - Enable Memgraph Lab UI for graph visualization
-- Add MCP JSON-RPC wrapper around gateway endpoints
+- Real downstream MCP proxy + credential broker (RFC-04)

@@ -42,10 +42,11 @@ docker compose --profile gateway-docker up -d --build
 python3 run_agentic_identity_demo.py
 python3 run_demo.py
 python3 run_person_b_demo.py all
+python3 run_mcp_demo.py
 ```
 
-## Next (Priority 3+)
+## Next (Priority 4+)
 
-- MCP JSON-RPC gateway with JWT on `tools/call`
-- RS256/JWKS from production Agentic-IAM
-- Human approver OIDC
+- RS256 / JWKS from real Agentic-IAM
+- OAuth for human approvers
+- Credential broker on downstream MCP proxy (RFC-04)
