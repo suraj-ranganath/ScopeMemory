@@ -120,6 +120,36 @@ Pipeline:
 14. If `REPAIR`, return schema/argument repair instructions.
 15. Append audit event and new graph edges (`invoked`, `produced`).
 
+## Authorization Check Contract
+
+Every `tools/call` request creates or reuses an authorization check identified by `check_id` and `(session_id, idempotency_key)`.
+
+States:
+
+```text
+created
+facts_compiled
+policy_evaluating
+pending
+waiting_for_human
+approved
+auto_approved
+denied
+repairable
+expired
+cancelled
+```
+
+Only `approved` and `auto_approved` checks may execute downstream tools. `waiting_for_human`, `repairable`, `denied`, `expired`, and `cancelled` are non-executable. Repeated requests with the same idempotency key return the same check record and proof linkage.
+
+Examples:
+
+- immediate `ALLOW` -> `approved`, executable.
+- `AUTO_APPROVE_EPHEMERAL_GRANT` -> `auto_approved`, executable after bounded grant/lease creation.
+- `ESCALATE_HUMAN` -> `waiting_for_human`, not executable until a grant exists.
+- `DENY` -> `denied`, not executable.
+- `REPAIR` -> `repairable`, not executable until repaired input is rechecked.
+
 ## Downstream Execution
 
 ### HTTP API Tools

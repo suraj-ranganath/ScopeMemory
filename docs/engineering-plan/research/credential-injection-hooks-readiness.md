@@ -13,12 +13,12 @@ Scope: local 1Password readiness, Claude Code hook behavior, Codex hook behavior
 Checked on Suraj's Mac:
 
 - 1Password desktop app: present at `/Applications/1Password.app`.
-- 1Password CLI `op`: not found on `PATH`.
+- 1Password CLI `op`: present at `/opt/homebrew/bin/op`, version `2.34.1`.
+- 1Password CLI account/session: not configured; `op whoami --format json` returns no account.
 - 1Password MCP server executable: not found at `/Applications/1Password.app/Contents/MacOS/onepassword-mcp`.
-- Search under `/Applications/1Password.app/Contents` did not find `op` or `onepassword-mcp`.
 - No secret value was read, printed, written, or persisted during this check.
 
-Consequence: the real 1Password provider is not locally resolvable yet. ScopeMemory should treat this as provider unavailable and fail closed by returning `DENY` or `ESCALATE_HUMAN`, depending on the policy context. It should not fall back to plaintext `.env` files or direct `op read` from an agent shell.
+Consequence: the 1Password CLI adapter can be exercised as code, but live provider resolution is not locally usable yet because no CLI account/session is configured. ScopeMemory should treat this as setup-required and fail closed by returning `ESCALATE_HUMAN` for provider authorization. It should not fall back to plaintext `.env` files or direct `op read` from an agent shell.
 
 ## Source Facts
 

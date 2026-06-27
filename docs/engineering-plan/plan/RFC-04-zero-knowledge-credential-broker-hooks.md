@@ -234,6 +234,17 @@ Execution:
 4. Broker injects into gateway request or child process.
 5. Broker records provider operation ID and lease use, not secret value.
 
+### Lease Use Enforcement
+
+The lease is not a bearer token for the agent. It can only be consumed by an approved execution boundary:
+
+- `gateway`
+- `broker`
+- `exec_wrapper`
+- `mcp_launcher`
+
+Each use must match the lease's session, tool, scope, and resource. Expired leases, exhausted `max_uses`, mismatched bindings, direct agent callers, and any lease marked `secret_exposed_to_agent=true` are denied. Successful use returns only non-secret evidence: `lease_id`, `credential_ref_id`, `credential_ref_hash`, provider metadata, injection mode, remaining uses, and `secret_exposed_to_agent=false`.
+
 ## Audit Contract
 
 For every credential use, store:

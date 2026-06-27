@@ -33,6 +33,7 @@ class OnePasswordReadiness:
     desktop_app_present: bool
     op_cli_path: str | None
     op_cli_version: str | None
+    op_account_configured: bool
     onepassword_mcp_path: str | None
     service_account_token_present: bool
     status: OnePasswordProviderStatus
@@ -55,6 +56,7 @@ def detect_onepassword_readiness(
     op_path: str | None = None,
     mcp_path: Path = MAC_MCP_PATH,
     app_path: Path = MAC_APP_PATH,
+    search_path: bool = True,
 ) -> OnePasswordReadiness:
     """Return non-secret provider readiness for broker planning."""
 
@@ -62,8 +64,9 @@ def detect_onepassword_readiness(
     platform_name = platform.system()
     desktop_app_present = app_path.exists() if platform_name == "Darwin" else False
 
-    resolved_op_path = op_path or shutil.which("op")
+    resolved_op_path = _resolve_op_path(op_path, search_path)
     op_cli_version = _safe_op_version(resolved_op_path) if resolved_op_path else None
+    op_account_configured = _safe_op_account_configured(resolved_op_path) if resolved_op_path else False
     resolved_mcp_path = str(mcp_path) if mcp_path.exists() and os.access(mcp_path, os.X_OK) else None
     service_account_token_present = bool(checked_env.get("OP_SERVICE_ACCOUNT_TOKEN"))
 
@@ -76,8 +79,10 @@ def detect_onepassword_readiness(
     else:
         setup_required.append("enable or install the 1Password local MCP server")
 
-    if resolved_op_path:
+    if resolved_op_path and op_account_configured:
         provider_modes.extend(["op_cli_secret_reference", "op_run_process_env"])
+    elif resolved_op_path:
+        setup_required.append("configure a 1Password CLI account/session")
     else:
         setup_required.append("install the 1Password CLI and make op available on PATH")
 
@@ -100,6 +105,7 @@ def detect_onepassword_readiness(
         desktop_app_present=desktop_app_present,
         op_cli_path=resolved_op_path,
         op_cli_version=op_cli_version,
+        op_account_configured=op_account_configured,
         onepassword_mcp_path=resolved_mcp_path,
         service_account_token_present=service_account_token_present,
         status=status,
@@ -123,6 +129,31 @@ def _safe_op_version(op_path: str) -> str | None:
     if result.returncode != 0:
         return None
     return result.stdout.strip() or None
+
+
+def _safe_op_account_configured(op_path: str) -> bool:
+    try:
+        result = subprocess.run(
+            [op_path, "account", "list", "--format", "json"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if result.returncode != 0:
+        return False
+    output = result.stdout.strip()
+    return bool(output) and output != "[]"
+
+
+def _resolve_op_path(op_path: str | None, search_path: bool) -> str | None:
+    if op_path:
+        return op_path if Path(op_path).exists() and os.access(op_path, os.X_OK) else None
+    if not search_path:
+        return None
+    return shutil.which("op")
 
 
 def _status_for(

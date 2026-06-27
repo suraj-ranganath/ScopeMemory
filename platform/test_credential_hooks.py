@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import unittest
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 
@@ -12,6 +13,8 @@ from credential_broker import (  # noqa: E402
     CredentialBroker,
     LeaseMintRequest,
     LeaseMintState,
+    LeaseUseRequest,
+    LeaseUseState,
 )
 from hook_adapter import (  # noqa: E402
     SecretAccessPattern,
@@ -33,6 +36,7 @@ class OnePasswordReadinessTests(unittest.TestCase):
             op_path=None,
             app_path=Path("/definitely/missing/1Password.app"),
             mcp_path=Path("/definitely/missing/onepassword-mcp"),
+            search_path=False,
         )
 
         self.assertEqual(readiness.status, OnePasswordProviderStatus.UNAVAILABLE)
@@ -71,6 +75,7 @@ class CredentialBrokerTests(unittest.TestCase):
             desktop_app_present=False,
             op_cli_path=None,
             op_cli_version=None,
+            op_account_configured=False,
             onepassword_mcp_path=None,
             service_account_token_present=False,
             status=OnePasswordProviderStatus.UNAVAILABLE,
@@ -86,6 +91,7 @@ class CredentialBrokerTests(unittest.TestCase):
             desktop_app_present=True,
             op_cli_path=None,
             op_cli_version=None,
+            op_account_configured=False,
             onepassword_mcp_path=None,
             service_account_token_present=True,
             status=OnePasswordProviderStatus.READY,
@@ -100,6 +106,74 @@ class CredentialBrokerTests(unittest.TestCase):
         self.assertTrue(result.lease.credential_ref_hash.startswith("sha256:"))
         self.assertFalse(result.lease.secret_exposed_to_agent)
 
+    def test_broker_refuses_agent_exposing_lease(self) -> None:
+        broker = CredentialBroker(_ready_service_account())
+        result = broker.mint_lease(LeaseMintRequest(
+            session_id="sess_test",
+            tool_id="linear.create_issue",
+            scope="linear:issues:create",
+            resource_id="linear_team:SALES",
+            binding=_binding("gateway_header"),
+            would_expose_secret_to_agent=True,
+        ))
+
+        self.assertEqual(result.state, LeaseMintState.DENIED)
+        self.assertIsNone(result.lease)
+
+    def test_lease_use_is_bound_and_max_use_enforced(self) -> None:
+        broker = CredentialBroker(_ready_service_account())
+        minted = broker.mint_lease(_request("gateway_header"))
+        assert minted.lease is not None
+
+        approved = broker.authorize_use(_use_request(minted.lease.lease_id, caller="gateway"))
+        exhausted = broker.authorize_use(_use_request(minted.lease.lease_id, caller="gateway"))
+
+        self.assertEqual(approved.state, LeaseUseState.APPROVED)
+        assert approved.evidence is not None
+        self.assertEqual(approved.evidence["remaining_uses"], 0)
+        self.assertFalse(approved.evidence["secret_exposed_to_agent"])
+        self.assertEqual(exhausted.state, LeaseUseState.EXHAUSTED)
+
+    def test_lease_use_rejects_binding_mismatch_and_agent_caller(self) -> None:
+        broker = CredentialBroker(_ready_service_account())
+        minted = broker.mint_lease(_request("gateway_header"))
+        assert minted.lease is not None
+
+        mismatch = broker.authorize_use(LeaseUseRequest(
+            lease_id=minted.lease.lease_id,
+            session_id="sess_test",
+            tool_id="slack.post_message",
+            scope="linear:issues:create",
+            resource_id="linear_team:SALES",
+            caller="gateway",
+        ))
+        agent = broker.authorize_use(_use_request(minted.lease.lease_id, caller="agent"))
+
+        self.assertEqual(mismatch.state, LeaseUseState.DENIED)
+        self.assertEqual(agent.state, LeaseUseState.DENIED)
+
+    def test_lease_use_expires(self) -> None:
+        current = datetime(2026, 6, 27, 22, 0, tzinfo=UTC)
+
+        def now() -> datetime:
+            return current
+
+        broker = CredentialBroker(_ready_service_account(), now=now)
+        minted = broker.mint_lease(LeaseMintRequest(
+            session_id="sess_test",
+            tool_id="linear.create_issue",
+            scope="linear:issues:create",
+            resource_id="linear_team:SALES",
+            binding=_binding("gateway_header"),
+            ttl_seconds=1,
+        ))
+        assert minted.lease is not None
+        current = current + timedelta(seconds=2)
+
+        result = broker.authorize_use(_use_request(minted.lease.lease_id, caller="gateway"))
+
+        self.assertEqual(result.state, LeaseUseState.EXPIRED)
+
 
 def _request(injection_mode: str) -> LeaseMintRequest:
     return LeaseMintRequest(
@@ -107,13 +181,42 @@ def _request(injection_mode: str) -> LeaseMintRequest:
         tool_id="linear.create_issue",
         scope="linear:issues:create",
         resource_id="linear_team:SALES",
-        binding=CredentialBinding(
-            credential_ref_id="credref_linear_sales",
-            provider="onepassword",
-            credential_class="linear.oauth_token",
-            owner_team="sales-ops",
-            injection_mode=injection_mode,
-        ),
+        binding=_binding(injection_mode),
+    )
+
+
+def _binding(injection_mode: str) -> CredentialBinding:
+    return CredentialBinding(
+        credential_ref_id="credref_linear_sales",
+        provider="onepassword",
+        credential_class="linear.oauth_token",
+        owner_team="sales-ops",
+        injection_mode=injection_mode,
+    )
+
+
+def _ready_service_account() -> OnePasswordReadiness:
+    return OnePasswordReadiness(
+        platform_name="Darwin",
+        desktop_app_present=True,
+        op_cli_path=None,
+        op_cli_version=None,
+        op_account_configured=False,
+        onepassword_mcp_path=None,
+        service_account_token_present=True,
+        status=OnePasswordProviderStatus.READY,
+        provider_modes=["onepassword_sdk_service_account"],
+    )
+
+
+def _use_request(lease_id: str, caller: str) -> LeaseUseRequest:
+    return LeaseUseRequest(
+        lease_id=lease_id,
+        session_id="sess_test",
+        tool_id="linear.create_issue",
+        scope="linear:issues:create",
+        resource_id="linear_team:SALES",
+        caller=caller,
     )
 
 

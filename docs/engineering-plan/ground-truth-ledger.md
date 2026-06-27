@@ -24,7 +24,7 @@
 - 1Password secret references use `op://vault/item/field` style references and can be resolved by CLI flows without putting raw secrets in project files. Source: 1Password CLI secret references docs, `https://www.1password.dev/cli/secret-references`.
 - 1Password MCP Server for Codex can manage Environments without returning secrets to the AI tool and can inject runtime variables into the authorized application process. Source: 1Password MCP Server docs, `https://www.1password.dev/environments/mcp-server`.
 - 1Password SDKs support Go, JavaScript, and Python integrations with desktop-app auth and service-account auth. Source: 1Password SDK docs, `https://www.1password.dev/sdks`.
-- Local readiness on 2026-06-27: `/Applications/1Password.app` exists, but `op` is not on `PATH` and `/Applications/1Password.app/Contents/MacOS/onepassword-mcp` is absent. Source: local checks recorded in `research/credential-injection-hooks-readiness.md`.
+- Local readiness on 2026-06-27: `/Applications/1Password.app` exists and `op` is installed at `/opt/homebrew/bin/op` version `2.34.1`, but no 1Password CLI account/session is configured and `/Applications/1Password.app/Contents/MacOS/onepassword-mcp` is absent. Source: local checks recorded in `research/credential-injection-hooks-readiness.md`.
 
 ## Canonical Conflict Resolutions
 
