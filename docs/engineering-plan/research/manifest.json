@@ -16,15 +16,19 @@
     "/Users/suraj.ranganath/Desktop/sr-code/third_party/pqprime/examples/c1-device-id/rfc/README.md",
     "https://modelcontextprotocol.io/specification/2025-11-25/server/tools",
     "https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization",
-    "https://docs.anthropic.com/en/docs/claude-code/hooks",
+    "https://code.claude.com/docs/en/hooks",
+    "https://developers.openai.com/codex/hooks",
     "https://www.1password.dev/cli/secret-references",
-    "https://www.1password.dev/"
+    "https://www.1password.dev/environments/mcp-server",
+    "https://www.1password.dev/environments/agent-hook-validate",
+    "https://www.1password.dev/sdks"
   ],
   "files": {
     "report.md": "Executive research summary.",
     "source-grounding.md": "Local repo and rough-plan facts.",
     "external-standards.md": "External standards and product docs.",
     "zero-knowledge-credential-injection.md": "Password manager and hook integration analysis.",
+    "credential-injection-hooks-readiness.md": "Local 1Password readiness and Claude/Codex hook behavior.",
     "threat-model.md": "Threat model and abuse cases.",
     "scope-reduction-report/report.md": "Harsh reduction pass for the MVP line."
   }

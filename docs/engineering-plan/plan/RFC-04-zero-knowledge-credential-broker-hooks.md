@@ -32,7 +32,15 @@ Responsibilities:
 
 Provider-specific resolver. V1 provider:
 
-- `1password`: resolves `op://...` references through 1Password CLI/service-account/environment flows.
+- `1password`: resolves broker-only references through 1Password CLI, SDK, service-account, desktop-auth, or Environment flows.
+
+The adapter must expose capabilities separately because each mode fits a different execution boundary:
+
+- `onepassword_mcp_environment`: official 1Password MCP server and Environments. Prefer for Codex-managed local application secrets when the local MCP binary and Environment are configured.
+- `onepassword_sdk_desktop`: Python SDK desktop-app auth. Prefer for local gateway/broker execution with human approval.
+- `onepassword_sdk_service_account`: Python SDK service-account auth. Prefer for automated broker execution with least-privilege vault or Environment access.
+- `op_run_process_env`: CLI `op run` around a short-lived broker-owned child process.
+- `op_cli_secret_reference`: direct secret-reference resolution inside broker code only; never agent-visible.
 
 Future providers:
 
@@ -92,9 +100,30 @@ Broker exposes a local socket that serves tokens to an approved child process or
 
 Use a provider-native runtime such as `op run` or a 1Password environment. The broker still owns the invocation and proof.
 
+### `onepassword_mcp_environment`
+
+Use the official 1Password MCP server to manage a 1Password Environment and mount runtime variables for an authorized application process. This mode is preferred for Codex local development workflows because the MCP server does not return secret values to the AI tool.
+
+Rules:
+
+- Treat the 1Password MCP server as a provider adapter, not as the ScopeMemory policy engine.
+- Store only Environment IDs, variable names, provider operation IDs, and lease metadata.
+- Require the local MCP server binary and desktop-app approval path to be available before claiming this mode.
+- Deny or escalate if the MCP server is missing, disabled, untrusted, or the user cancels the approval prompt.
+
 ## PreToolUse Hook Adapter
 
 Hooks are an adapter for clients that can intercept tool calls before execution.
+
+Claude Code and Codex both support `PreToolUse`, but their behavior is not identical. ScopeMemory must normalize host-specific hook JSON into `ToolIntent` and keep the canonical authorization result in the gateway/broker.
+
+### Host Constraints
+
+- Claude Code can match MCP tools with names like `mcp__server__tool`; `PreToolUse` command hooks receive JSON on stdin and can deny, ask, defer, allow, or rewrite tool input.
+- Codex can intercept supported Bash, `apply_patch`, and MCP tool calls; command hooks receive JSON on stdin and can deny or rewrite supported inputs.
+- Codex matching command hooks for the same event can launch concurrently, so a project hook must not be the only credential protection layer.
+- Both hosts can run hooks with high local privileges. Hook scripts must validate and sanitize all tool input.
+- Neither host hook may place decrypted credentials into `updatedInput`, additional context, stdout, stderr, transcript-visible text, or project files.
 
 ### Hook Input
 
@@ -189,6 +218,14 @@ credential_class = linear.oauth_token
 owner_team = sales-ops
 ```
 
+For setup docs, a placeholder secret reference may use this shape:
+
+```text
+op://ScopeMemory Demo/Linear API Token/token
+```
+
+This is not a verified vault/item/field. Runtime policy should prefer opaque `credential_ref_id` values and store raw provider paths only when the metadata policy allows them.
+
 Execution:
 
 1. Policy grants a credential lease.
@@ -229,4 +266,7 @@ Do not store:
 - User cancels 1Password prompt: `ESCALATE_HUMAN` with safe reason.
 - Credential lease expired: `REPAIR` if refresh is safe, else `ESCALATE_HUMAN`.
 - Hook unavailable: fall back to gateway-only tools; do not allow direct secret access.
+- 1Password MCP server missing or disabled: do not claim Environment injection; escalate setup or deny.
+- `op` CLI missing: do not use CLI provider mode; escalate setup or deny.
+- Service account token absent: do not ask the agent for the token; mark service-account mode unavailable.
 - Broker cannot guarantee non-exposure: `DENY`.
