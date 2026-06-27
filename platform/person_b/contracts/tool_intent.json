@@ -1,0 +1,7 @@
+{
+  "session_id": "sess_demo_001",
+  "agent_id": "agent_renewal_01",
+  "tool_id": "linear.create_issue",
+  "resource_id": "linear_team:SALES",
+  "intent_kind": "write"
+}

@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ScopeMemory — Person B Demo UI</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header>
+    <h1>ScopeMemory Demo</h1>
+    <p class="subtitle">SessionGoal → RecipeHits → PredictedScopes → AccessRequests → UI State</p>
+    <div id="health" class="badge">loading…</div>
+  </header>
+
+  <main class="grid">
+    <section class="panel">
+      <h2>Live Session</h2>
+      <div id="session"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Recipe Hits</h2>
+      <div id="recipes"></div>
+      <button id="btn-index">Sync Graph Index</button>
+      <pre id="index-status"></pre>
+    </section>
+
+    <section class="panel">
+      <h2>Access Requests</h2>
+      <div id="requests"></div>
+    </section>
+
+    <section class="panel wide">
+      <h2>Proof Tree / Policy Decisions</h2>
+      <div id="proof"></div>
+    </section>
+
+    <section class="panel wide">
+      <h2>Timeline</h2>
+      <div id="timeline"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Slack (mock + injection)</h2>
+      <button id="btn-slack">Search #sales-acme</button>
+      <pre id="slack"></pre>
+    </section>
+
+    <section class="panel">
+      <h2>Recipe Learning</h2>
+      <button id="btn-learn">Propose Recipe v4</button>
+      <pre id="proposal"></pre>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

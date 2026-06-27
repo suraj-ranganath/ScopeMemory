@@ -1,0 +1,16 @@
+{
+  "proposal_id": "proposal/recipe-sales-renewal-v4",
+  "base_recipe_id": "recipe_sales_renewal_v3",
+  "title": "Sales Renewal Prep v4",
+  "goal_class": "sales_renewal_prep",
+  "status": "proposed",
+  "diff": {
+    "added_scopes": [],
+    "changed_approval_modes": {
+      "slack:channels:history": "human_required"
+    },
+    "added_tools": []
+  },
+  "evidence_sessions": ["sess_demo_001"],
+  "confidence": 0.84
+}

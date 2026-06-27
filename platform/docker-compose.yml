@@ -33,9 +33,10 @@ services:
     depends_on:
       dolt:
         condition: service_healthy
+      memgraph:
+        condition: service_started
 
   memgraph:
-    profiles: ["memgraph"]
     image: memgraph/memgraph:latest
     ports:
       - "7687:7687"

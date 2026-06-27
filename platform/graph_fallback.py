@@ -92,6 +92,43 @@ class InMemoryGraph:
             "facts": facts,
         }
 
+    def search_recipes(
+        self, team_id: str, goal_class: str, goal_text: str, limit: int = 3,
+    ) -> list[dict[str, Any]]:
+        hits = []
+        for recipe in self.data.get("workflow_recipes", []):
+            if recipe["team_id"] != team_id or recipe["status"] != "accepted":
+                continue
+            score = 0.0
+            if recipe["goal_class"] == goal_class:
+                score += 0.6
+            gt = goal_text.lower()
+            if recipe["goal_class"].lower() in gt:
+                score += 0.2
+            if recipe["title"].lower() in gt:
+                score += 0.2
+            if score <= 0:
+                continue
+            tools = [
+                r["tool_id"] for r in self.data.get("recipe_tools", [])
+                if r["recipe_id"] == recipe["recipe_id"]
+            ]
+            scopes = [
+                r["scope"] for r in self.data.get("recipe_scopes", [])
+                if r["recipe_id"] == recipe["recipe_id"]
+            ]
+            hits.append({
+                "recipe_id": recipe["recipe_id"],
+                "title": recipe["title"],
+                "goal_class": recipe["goal_class"],
+                "score": round(score, 3),
+                "dolt_commit": "main",
+                "predicted_tools": tools,
+                "predicted_scopes": scopes,
+            })
+        hits.sort(key=lambda h: h["score"], reverse=True)
+        return hits[:limit]
+
 
 _graph: InMemoryGraph | None = None
 

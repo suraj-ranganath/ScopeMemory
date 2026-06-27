@@ -1,18 +1,32 @@
-"""ScopeMemory MCP Gateway — preflight, authorize, proof."""
+"""ScopeMemory MCP Gateway — preflight, authorize, proof + Person B demo surface."""
 
 from __future__ import annotations
 
+import json
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from agentic_iam import router as iam_router, verify_agent_active
 from cozo_policy import evaluate, export_facts
-from dolt_store import get_session, init_schema, save_policy_decision, seed_demo
+from dolt_store import (
+    approve_access_request,
+    get_session,
+    init_schema,
+    list_access_requests,
+    save_policy_decision,
+    seed_demo,
+)
 from graph_backend import authorize_context, backend_name, preflight_context, sync_graph
+
+WEB_DIR = Path(__file__).parent / "web"
+FIXTURES_DIR = Path(__file__).parent / "person_b" / "fixtures"
 
 
 def _wait_for_dolt(max_attempts: int = 30) -> None:
@@ -50,6 +64,18 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="ScopeMemory Gateway", lifespan=lifespan)
 app.include_router(iam_router)
+app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
+
+
+def _recipe_hits_for_session(session: dict[str, Any], session_id: str) -> tuple[list[dict[str, Any]], str]:
+    from graph_backend import backend_name, search_recipe_hits
+    hits = search_recipe_hits(
+        team_id=session["team_id"],
+        goal_class=session["goal_class"],
+        goal_text=session["goal"],
+        session_id=session_id,
+    )
+    return hits, backend_name()
 
 
 class PreflightRequest(BaseModel):
@@ -66,7 +92,17 @@ class AuthorizeRequest(BaseModel):
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "stack": "dolt+graph+policy", "graph_backend": backend_name()}
+    return {
+        "status": "ok",
+        "stack": "dolt+graph+policy",
+        "graph_backend": backend_name(),
+        "recipe_retrieval": backend_name(),
+    }
+
+
+@app.get("/")
+def demo_ui() -> FileResponse:
+    return FileResponse(WEB_DIR / "index.html")
 
 
 @app.post("/auth/preflight")
@@ -80,6 +116,7 @@ def preflight(req: PreflightRequest) -> dict[str, Any]:
 
     rows, engine = sync_graph()
     ctx = preflight_context(req.session_id)
+    recipe_hits, retrieval_engine = _recipe_hits_for_session(session, req.session_id)
     return {
         "session_id": req.session_id,
         "agentic_iam": {
@@ -90,6 +127,8 @@ def preflight(req: PreflightRequest) -> dict[str, Any]:
         "source_of_truth": "dolt",
         "query_engine": engine,
         "synced_rows": rows,
+        "recipe_hits": recipe_hits,
+        "recipe_retrieval": retrieval_engine,
         **ctx,
     }
 
@@ -157,3 +196,85 @@ def get_proof(session_id: str) -> dict[str, Any]:
 def admin_sync() -> dict[str, Any]:
     rows, engine = sync_graph()
     return {"synced_rows": rows, "target": engine}
+
+
+@app.post("/admin/reseed")
+def admin_reseed() -> dict[str, Any]:
+    """Reset demo seed data and re-sync graph (safe to call between demo runs)."""
+    seed_demo()
+    rows, engine = sync_graph()
+    return {"status": "reseeded", "synced_rows": rows, "graph_engine": engine}
+
+
+# --- Person B (RFC-06): demo surface, fixtures, Memgraph recipe index, learning ---
+
+
+@app.get("/demo/ui-state/{session_id}")
+def demo_ui_state(session_id: str, fixtures: bool = False) -> dict[str, Any]:
+    from person_b.ui_state import build_ui_state
+    try:
+        return build_ui_state(session_id, use_fixtures=fixtures)
+    except ValueError as e:
+        raise HTTPException(404, str(e)) from e
+
+
+@app.get("/fixtures/{name}")
+def get_fixture(name: str) -> Any:
+    path = FIXTURES_DIR / f"{name}.json"
+    if not path.exists():
+        raise HTTPException(404, f"fixture not found: {name}")
+    return json.loads(path.read_text())
+
+
+@app.get("/demo/access-requests")
+def demo_access_requests(session_id: str | None = None) -> dict[str, Any]:
+    return {"requests": list_access_requests(session_id)}
+
+
+class ApproveRequest(BaseModel):
+    approver_id: str = "user_bob"
+
+
+@app.post("/demo/access-requests/{request_id}/approve")
+def demo_approve_request(request_id: str, body: ApproveRequest) -> dict[str, Any]:
+    try:
+        return approve_access_request(request_id, body.approver_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e)) from e
+
+
+@app.get("/demo/slack/search")
+def demo_slack_search(channel: str = Query(..., alias="channel")) -> dict[str, Any]:
+    from person_b.slack_fixtures import search_slack
+    return search_slack(channel)
+
+
+@app.post("/index/recipes")
+def index_recipes() -> dict[str, Any]:
+    from person_b.memgraph_recipe_index import index_accepted_recipes
+    return index_accepted_recipes()
+
+
+@app.get("/index/status")
+def index_status() -> dict[str, Any]:
+    import pymysql
+    from config import DOLT_DATABASE, DOLT_HOST, DOLT_PASSWORD, DOLT_PORT, DOLT_USER
+    from pymysql.cursors import DictCursor
+    conn = pymysql.connect(
+        host=DOLT_HOST, port=DOLT_PORT, user=DOLT_USER, password=DOLT_PASSWORD,
+        database=DOLT_DATABASE, cursorclass=DictCursor,
+    )
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM recipe_index_meta")
+        rows = cur.fetchall()
+    conn.close()
+    return {"indexed": len(rows), "recipes": rows}
+
+
+@app.post("/demo/recipes/propose")
+def demo_propose_recipe(session_id: str = "sess_demo_001") -> dict[str, Any]:
+    from person_b.learning_worker import propose_recipe_from_session
+    try:
+        return propose_recipe_from_session(session_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e)) from e

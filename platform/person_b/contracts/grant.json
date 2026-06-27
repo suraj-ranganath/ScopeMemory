@@ -1,0 +1,6 @@
+{
+  "grant_id": "grant_linear_001",
+  "session_id": "sess_demo_001",
+  "scope": "linear:issues:create",
+  "resource_id": "linear_team:SALES"
+}

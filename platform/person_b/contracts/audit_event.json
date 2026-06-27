@@ -1,0 +1,6 @@
+{
+  "event_id": "evt_003",
+  "session_id": "sess_demo_001",
+  "event_type": "access_request_created",
+  "payload": { "request_id": "req_slack_history_001" }
+}
