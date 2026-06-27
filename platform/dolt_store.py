@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -11,8 +12,146 @@ import pymysql
 from pymysql.cursors import DictCursor
 
 from config import DOLT_DATABASE, DOLT_HOST, DOLT_PASSWORD, DOLT_PORT, DOLT_USER
+from policy_contracts import stable_hash
 
 SCHEMA_PATH = Path(__file__).parent / "dolt" / "schema.sql"
+
+
+def _json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, default=str)
+
+
+def _short_hash(value: Any, length: int = 24) -> str:
+    digest = stable_hash(value).split(":", 1)[1]
+    return digest[:length]
+
+
+def _mysql_timestamp(value: datetime) -> str:
+    return value.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _ensure_runtime_columns(cur) -> None:
+    migrations = [
+        ("grants", "issuer", "VARCHAR(128) NOT NULL DEFAULT 'policy'"),
+        ("grants", "proof_id", "VARCHAR(128)"),
+        ("grants", "ttl_seconds", "INT NOT NULL DEFAULT 900"),
+        ("grants", "call_count_remaining", "INT NOT NULL DEFAULT 1"),
+        ("grants", "expires_at", "TIMESTAMP NULL"),
+        ("grants", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+        ("policy_decisions", "context_snapshot_id", "VARCHAR(128)"),
+        ("policy_decisions", "dolt_commit_hash", "VARCHAR(128) NOT NULL DEFAULT 'demo-fixture'"),
+        ("policy_decisions", "qdrant_hits_json", "LONGTEXT"),
+        ("policy_decisions", "credential_lease_id", "VARCHAR(128)"),
+        ("access_requests", "agent_id", "VARCHAR(128)"),
+        ("access_requests", "proof_id", "VARCHAR(128)"),
+        ("access_requests", "approver_type", "VARCHAR(64) NOT NULL DEFAULT 'human'"),
+        ("access_requests", "expires_at", "TIMESTAMP NULL"),
+        ("session_events", "prev_event_hash", "VARCHAR(128)"),
+        ("session_events", "event_hash", "VARCHAR(128)"),
+    ]
+    for table, column, definition in migrations:
+        try:
+            cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        except Exception:
+            pass
+
+
+def _latest_event_hash(cur, session_id: str) -> str:
+    cur.execute(
+        """
+        SELECT event_hash
+        FROM session_events
+        WHERE session_id = %s AND event_hash IS NOT NULL
+        ORDER BY created_at DESC, event_id DESC
+        LIMIT 1
+        """,
+        (session_id,),
+    )
+    row = cur.fetchone()
+    return row["event_hash"] if row and row.get("event_hash") else ""
+
+
+def _append_session_event(
+    cur,
+    session_id: str,
+    event_type: str,
+    body: dict[str, Any],
+    *,
+    event_id: str | None = None,
+) -> dict[str, Any]:
+    event_id = event_id or f"evt_{uuid.uuid4().hex[:12]}"
+    previous = _latest_event_hash(cur, session_id)
+    event_hash = stable_hash(
+        {
+            "event_id": event_id,
+            "session_id": session_id,
+            "event_type": event_type,
+            "body": body,
+            "previous_hash": previous,
+        }
+    )
+    cur.execute(
+        """
+        INSERT INTO session_events
+        (event_id, session_id, event_type, event_json, prev_event_hash, event_hash)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        """,
+        (event_id, session_id, event_type, _json(body), previous or None, event_hash),
+    )
+    return {
+        "event_id": event_id,
+        "session_id": session_id,
+        "event_type": event_type,
+        "body": body,
+        "previous_hash": previous,
+        "event_hash": event_hash,
+    }
+
+
+def _insert_grant(
+    cur,
+    *,
+    session_id: str,
+    scope: str,
+    resource_id: str,
+    issuer: str,
+    proof_id: str,
+    ttl_seconds: int = 900,
+    call_count_remaining: int = 1,
+    grant_id: str | None = None,
+) -> dict[str, Any]:
+    grant_id = grant_id or f"grant_{uuid.uuid4().hex[:12]}"
+    expires_at = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
+    cur.execute(
+        """
+        INSERT INTO grants
+        (grant_id, session_id, scope, resource_id, issuer, proof_id,
+         ttl_seconds, call_count_remaining, expires_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            grant_id,
+            session_id,
+            scope,
+            resource_id,
+            issuer,
+            proof_id,
+            ttl_seconds,
+            call_count_remaining,
+            _mysql_timestamp(expires_at),
+        ),
+    )
+    return {
+        "grant_id": grant_id,
+        "session_id": session_id,
+        "scope": scope,
+        "resource_id": resource_id,
+        "issuer": issuer,
+        "proof_id": proof_id,
+        "ttl_seconds": ttl_seconds,
+        "call_count_remaining": call_count_remaining,
+        "expires_at": expires_at.isoformat().replace("+00:00", "Z"),
+    }
 
 
 def connect(database: str | None = None):
@@ -65,6 +204,7 @@ def init_schema() -> None:
                 )
             except Exception:
                 pass
+        _ensure_runtime_columns(cur)
     conn.close()
 
 
@@ -72,6 +212,7 @@ def seed_demo() -> None:
     conn = connect()
     cur = conn.cursor()
     tables = [
+        "session_context_snapshots", "session_recipe_similarity", "graph_edges", "graph_nodes",
         "recipe_index_meta", "slack_fixtures", "session_events", "recipe_proposals",
         "access_requests", "policy_decisions", "grants", "recipe_scopes", "recipe_tools",
         "workflow_recipes", "delegations", "sessions", "resources",
@@ -141,24 +282,31 @@ def seed_demo() -> None:
             ("slack.post_message", "slack:chat:write", "write"),
         ],
     )
-    cur.execute(
-        "INSERT INTO grants VALUES (%s, %s, %s, %s)",
-        ("grant_linear_001", "sess_demo_001", "linear:issues:create", "linear_team:SALES"),
+    _insert_grant(
+        cur,
+        grant_id="grant_linear_001",
+        session_id="sess_demo_001",
+        scope="linear:issues:create",
+        resource_id="linear_team:SALES",
+        issuer="seed",
+        proof_id="seed_linear_grant",
+        ttl_seconds=86400,
+        call_count_remaining=10,
     )
 
     cur.execute(
         """
         INSERT INTO access_requests
-        (request_id, session_id, user_id, requested_scope, requested_resource,
-         requested_tool_id, reason, recipe_id, status)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        (request_id, session_id, user_id, agent_id, requested_scope, requested_resource,
+         requested_tool_id, reason, recipe_id, proof_id, status)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
-            "req_slack_history_001", "sess_demo_001", "user_alice",
+            "req_slack_history_001", "sess_demo_001", "user_alice", "agent_renewal_01",
             "slack:channels:history", "slack_channel:sales-acme",
             "slack.search_messages",
             "Sales renewal prep recipe predicts Slack read for customer context",
-            "recipe_sales_renewal_v3", "pending",
+            "recipe_sales_renewal_v3", "seed_pending_slack_history", "pending",
         ),
     )
 
@@ -181,10 +329,7 @@ def seed_demo() -> None:
         ("evt_002", "recipe_matched", {"recipe_id": "recipe_sales_renewal_v3", "score": 0.89}),
         ("evt_003", "access_request_created", {"request_id": "req_slack_history_001"}),
     ]:
-        cur.execute(
-            "INSERT INTO session_events (event_id, session_id, event_type, event_json) VALUES (%s, %s, %s, %s)",
-            (eid, "sess_demo_001", etype, json.dumps(ej)),
-        )
+        _append_session_event(cur, "sess_demo_001", etype, ej, event_id=eid)
 
     conn.close()
 
@@ -216,12 +361,271 @@ def get_agent(agent_id: str) -> dict[str, Any] | None:
     return row
 
 
+def append_session_event(session_id: str, event_type: str, body: dict[str, Any]) -> dict[str, Any]:
+    conn = connect()
+    with conn.cursor() as cur:
+        event = _append_session_event(cur, session_id, event_type, body)
+    conn.close()
+    return event
+
+
+def save_context_snapshot(
+    session_id: str,
+    phase: str,
+    subgraph: dict[str, Any],
+    *,
+    policy_decision_id: str | None = None,
+    dolt_commit_hash: str = "demo-fixture",
+    qdrant_index_commit: str = "demo-fixture",
+) -> dict[str, Any]:
+    snapshot_id = f"snap_{uuid.uuid4().hex[:12]}"
+    fact_set_hash = stable_hash(subgraph)
+    conn = connect()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO session_context_snapshots
+            (snapshot_id, session_id, phase, subgraph_json, fact_set_hash,
+             policy_decision_id, dolt_commit_hash, qdrant_index_commit)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                snapshot_id,
+                session_id,
+                phase,
+                _json(subgraph),
+                fact_set_hash,
+                policy_decision_id,
+                dolt_commit_hash,
+                qdrant_index_commit,
+            ),
+        )
+    conn.close()
+    return {
+        "snapshot_id": snapshot_id,
+        "session_id": session_id,
+        "phase": phase,
+        "fact_set_hash": fact_set_hash,
+        "dolt_commit_hash": dolt_commit_hash,
+        "qdrant_index_commit": qdrant_index_commit,
+    }
+
+
+def attach_decision_to_snapshot(snapshot_id: str, decision_id: str) -> None:
+    conn = connect()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE session_context_snapshots
+            SET policy_decision_id = %s
+            WHERE snapshot_id = %s
+            """,
+            (decision_id, snapshot_id),
+        )
+    conn.close()
+
+
+def save_recipe_hits(session_id: str, recipe_hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    saved: list[dict[str, Any]] = []
+    conn = connect()
+    with conn.cursor() as cur:
+        for rank, hit in enumerate(recipe_hits, start=1):
+            recipe_id = hit["recipe_id"]
+            graph_node_id = hit.get("graph_node_id") or f"node_{_short_hash({'kind': 'Recipe', 'id': recipe_id})}"
+            row = {
+                "session_id": session_id,
+                "recipe_id": recipe_id,
+                "score": float(hit.get("score", 0)),
+                "rank_order": rank,
+                "graph_node_id": graph_node_id,
+                "qdrant_point_id": hit.get("qdrant_point_id"),
+                "dolt_commit_hash": hit.get("dolt_commit", "demo-fixture"),
+                "qdrant_index_commit": hit.get("qdrant_index_commit", "demo-fixture"),
+                "reified": bool(hit.get("similarity_reified", True)),
+            }
+            cur.execute(
+                """
+                INSERT INTO session_recipe_similarity
+                (session_id, recipe_id, score, rank_order, graph_node_id,
+                 qdrant_point_id, dolt_commit_hash, qdrant_index_commit, reified)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                  score = VALUES(score),
+                  rank_order = VALUES(rank_order),
+                  graph_node_id = VALUES(graph_node_id),
+                  qdrant_point_id = VALUES(qdrant_point_id),
+                  dolt_commit_hash = VALUES(dolt_commit_hash),
+                  qdrant_index_commit = VALUES(qdrant_index_commit),
+                  reified = VALUES(reified)
+                """,
+                (
+                    row["session_id"],
+                    row["recipe_id"],
+                    row["score"],
+                    row["rank_order"],
+                    row["graph_node_id"],
+                    row["qdrant_point_id"],
+                    row["dolt_commit_hash"],
+                    row["qdrant_index_commit"],
+                    int(row["reified"]),
+                ),
+            )
+            saved.append(row)
+    conn.close()
+    return saved
+
+
+def record_context_graph(
+    session_id: str,
+    phase: str,
+    ctx: dict[str, Any],
+    *,
+    recipe_hits: list[dict[str, Any]] | None = None,
+    snapshot_id: str | None = None,
+) -> dict[str, int]:
+    nodes: dict[tuple[str, str], dict[str, Any]] = {}
+    edges: list[dict[str, Any]] = []
+    provenance = snapshot_id or phase
+
+    def add_node(kind: str, source_id: str | None, label: str | None = None, **payload: Any) -> str | None:
+        if not source_id:
+            return None
+        key = (kind, source_id)
+        node_id = f"node_{_short_hash({'kind': kind, 'source_id': source_id})}"
+        nodes[key] = {
+            "node_id": node_id,
+            "node_kind": kind,
+            "source_id": source_id,
+            "label": label or source_id,
+            "payload": {"kind": kind, "source_id": source_id, **payload},
+        }
+        return node_id
+
+    def add_edge(
+        src: str | None,
+        dst: str | None,
+        kind: str,
+        *,
+        confidence: float = 1.0,
+        **payload: Any,
+    ) -> None:
+        if not src or not dst:
+            return
+        edge_id = f"edge_{_short_hash({'src': src, 'dst': dst, 'kind': kind, 'provenance': provenance})}"
+        edges.append({
+            "edge_id": edge_id,
+            "src_node_id": src,
+            "dst_node_id": dst,
+            "edge_kind": kind,
+            "payload": {"kind": kind, **payload},
+            "confidence": confidence,
+        })
+
+    facts = ctx.get("facts") or {}
+    session_node = add_node("Session", session_id, status=ctx.get("status"))
+    user_node = add_node("User", ctx.get("user_id") or facts.get("user_id"))
+    agent = ctx.get("agent") or {}
+    agent_node = add_node("Agent", agent.get("agent_id") or facts.get("agent_id"), label=agent.get("display_name"))
+    team_node = add_node("Team", facts.get("session_team") or facts.get("resource_team"))
+    resource_node = add_node("Resource", ctx.get("resource_id") or facts.get("resource_id"))
+    scope_node = add_node("Scope", facts.get("scope"))
+    tool_node = add_node("MCPTool", ctx.get("tool_id") or facts.get("tool_id"))
+
+    add_edge(user_node, session_node, "RUNS")
+    add_edge(agent_node, session_node, "EXECUTES")
+    add_edge(resource_node, team_node, "OWNED_BY")
+    add_edge(tool_node, scope_node, "REQUIRES_SCOPE")
+    add_edge(scope_node, resource_node, "APPLIES_TO")
+
+    matched = ctx.get("matched_recipe")
+    if matched:
+        recipe_node = add_node("Recipe", matched.get("recipe_id") or matched.get("id"), label=matched.get("title"), **matched)
+        add_edge(session_node, recipe_node, "MATCHES", confidence=1.0, source="graph_context")
+        for tool_id in ctx.get("predicted_tools") or []:
+            predicted_tool = add_node("MCPTool", tool_id)
+            add_edge(recipe_node, predicted_tool, "PREDICTS_TOOL")
+        for scope in ctx.get("predicted_scopes") or []:
+            predicted_scope = add_node("Scope", scope)
+            add_edge(recipe_node, predicted_scope, "PREDICTS_SCOPE")
+
+    for hit in recipe_hits or []:
+        recipe_node = add_node("Recipe", hit.get("recipe_id"), label=hit.get("title"), **hit)
+        add_edge(
+            session_node,
+            recipe_node,
+            "SIMILAR_RECIPE",
+            confidence=float(hit.get("score", 0)),
+            source="recipe_retrieval",
+            rank=hit.get("rank_order"),
+        )
+
+    conn = connect()
+    with conn.cursor() as cur:
+        for node in nodes.values():
+            payload = node["payload"]
+            cur.execute(
+                """
+                INSERT INTO graph_nodes
+                (node_id, node_kind, source_id, label, payload_json, provenance, content_hash)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                  label = VALUES(label),
+                  payload_json = VALUES(payload_json),
+                  provenance = VALUES(provenance),
+                  content_hash = VALUES(content_hash),
+                  updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    node["node_id"],
+                    node["node_kind"],
+                    node["source_id"],
+                    node["label"],
+                    _json(payload),
+                    provenance,
+                    stable_hash(payload),
+                ),
+            )
+        for edge in edges:
+            payload = edge["payload"]
+            cur.execute(
+                """
+                INSERT INTO graph_edges
+                (edge_id, src_node_id, dst_node_id, edge_kind, payload_json,
+                 confidence, provenance, content_hash)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                  payload_json = VALUES(payload_json),
+                  confidence = VALUES(confidence),
+                  provenance = VALUES(provenance),
+                  content_hash = VALUES(content_hash),
+                  updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    edge["edge_id"],
+                    edge["src_node_id"],
+                    edge["dst_node_id"],
+                    edge["edge_kind"],
+                    _json(payload),
+                    edge["confidence"],
+                    provenance,
+                    stable_hash(payload),
+                ),
+            )
+    conn.close()
+    return {"nodes": len(nodes), "edges": len(edges)}
+
+
 def save_policy_decision(
     session_id: str,
     tool_id: str,
     resource_id: str,
     decision: str,
     proof: dict[str, Any],
+    *,
+    context_snapshot_id: str | None = None,
+    dolt_commit_hash: str = "demo-fixture",
+    qdrant_hits: list[dict[str, Any]] | None = None,
+    credential_lease_id: str | None = None,
 ) -> str:
     decision_id = f"dec_{uuid.uuid4().hex[:12]}"
     conn = connect()
@@ -229,13 +633,217 @@ def save_policy_decision(
         cur.execute(
             """
             INSERT INTO policy_decisions
-            (decision_id, session_id, tool_id, resource_id, decision, proof_json)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            (decision_id, session_id, tool_id, resource_id, decision, proof_json,
+             context_snapshot_id, dolt_commit_hash, qdrant_hits_json, credential_lease_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
-            (decision_id, session_id, tool_id, resource_id, decision, json.dumps(proof)),
+            (
+                decision_id,
+                session_id,
+                tool_id,
+                resource_id,
+                decision,
+                _json(proof),
+                context_snapshot_id,
+                dolt_commit_hash,
+                _json(qdrant_hits or []),
+                credential_lease_id,
+            ),
         )
     conn.close()
     return decision_id
+
+
+def issue_ephemeral_grant(
+    session_id: str,
+    scope: str,
+    resource_id: str,
+    *,
+    issuer: str,
+    proof_id: str,
+    ttl_seconds: int = 900,
+    call_count_remaining: int = 1,
+) -> dict[str, Any]:
+    conn = connect()
+    with conn.cursor() as cur:
+        grant = _insert_grant(
+            cur,
+            session_id=session_id,
+            scope=scope,
+            resource_id=resource_id,
+            issuer=issuer,
+            proof_id=proof_id,
+            ttl_seconds=ttl_seconds,
+            call_count_remaining=call_count_remaining,
+        )
+        _append_session_event(
+            cur,
+            session_id,
+            "grant_issued",
+            {
+                "grant_id": grant["grant_id"],
+                "scope": scope,
+                "resource_id": resource_id,
+                "issuer": issuer,
+                "proof_id": proof_id,
+                "ttl_seconds": ttl_seconds,
+                "call_count_remaining": call_count_remaining,
+            },
+        )
+    conn.close()
+    return grant
+
+
+def consume_grant_for_tool(
+    session_id: str,
+    tool_id: str,
+    resource_id: str,
+    *,
+    decision_id: str,
+) -> dict[str, Any] | None:
+    conn = connect()
+    consumed: dict[str, Any] | None = None
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT g.*
+            FROM grants g
+            JOIN tool_scopes ts ON ts.scope = g.scope
+            WHERE g.session_id = %s
+              AND ts.tool_id = %s
+              AND g.resource_id = %s
+              AND g.call_count_remaining > 0
+              AND (g.expires_at IS NULL OR g.expires_at > NOW())
+            ORDER BY g.created_at DESC
+            LIMIT 1
+            """,
+            (session_id, tool_id, resource_id),
+        )
+        grant = cur.fetchone()
+        if grant:
+            cur.execute(
+                """
+                UPDATE grants
+                SET call_count_remaining = call_count_remaining - 1
+                WHERE grant_id = %s AND call_count_remaining > 0
+                """,
+                (grant["grant_id"],),
+            )
+            grant["call_count_remaining"] = int(grant["call_count_remaining"]) - 1
+            _append_session_event(
+                cur,
+                session_id,
+                "grant_consumed",
+                {
+                    "grant_id": grant["grant_id"],
+                    "tool_id": tool_id,
+                    "resource_id": resource_id,
+                    "decision_id": decision_id,
+                    "call_count_remaining": grant["call_count_remaining"],
+                },
+            )
+            consumed = grant
+    conn.close()
+    return consumed
+
+
+def create_access_request(
+    *,
+    session_id: str,
+    user_id: str,
+    agent_id: str,
+    requested_scope: str,
+    requested_resource: str,
+    requested_tool_id: str,
+    reason: str,
+    recipe_id: str | None,
+    proof_id: str,
+) -> dict[str, Any]:
+    conn = connect()
+    result: dict[str, Any]
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT *
+            FROM access_requests
+            WHERE session_id = %s
+              AND requested_scope = %s
+              AND requested_resource = %s
+              AND requested_tool_id = %s
+              AND status = 'pending'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (session_id, requested_scope, requested_resource, requested_tool_id),
+        )
+        existing = cur.fetchone()
+        if existing:
+            cur.execute(
+                """
+                UPDATE access_requests
+                SET reason = %s, recipe_id = %s, proof_id = %s, agent_id = %s
+                WHERE request_id = %s
+                """,
+                (reason, recipe_id, proof_id, agent_id, existing["request_id"]),
+            )
+            existing.update({
+                "reason": reason,
+                "recipe_id": recipe_id,
+                "proof_id": proof_id,
+                "agent_id": agent_id,
+                "already_pending": True,
+            })
+            result = existing
+        else:
+            request_id = f"req_{uuid.uuid4().hex[:12]}"
+            cur.execute(
+                """
+                INSERT INTO access_requests
+                (request_id, session_id, user_id, agent_id, requested_scope,
+                 requested_resource, requested_tool_id, reason, recipe_id, proof_id, status)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending')
+                """,
+                (
+                    request_id,
+                    session_id,
+                    user_id,
+                    agent_id,
+                    requested_scope,
+                    requested_resource,
+                    requested_tool_id,
+                    reason,
+                    recipe_id,
+                    proof_id,
+                ),
+            )
+            _append_session_event(
+                cur,
+                session_id,
+                "access_request_created",
+                {
+                    "request_id": request_id,
+                    "tool_id": requested_tool_id,
+                    "scope": requested_scope,
+                    "resource_id": requested_resource,
+                    "recipe_id": recipe_id,
+                    "proof_id": proof_id,
+                },
+            )
+            result = {
+                "request_id": request_id,
+                "session_id": session_id,
+                "user_id": user_id,
+                "agent_id": agent_id,
+                "requested_scope": requested_scope,
+                "requested_resource": requested_resource,
+                "requested_tool_id": requested_tool_id,
+                "reason": reason,
+                "recipe_id": recipe_id,
+                "proof_id": proof_id,
+                "status": "pending",
+            }
+    conn.close()
+    return result
 
 
 def approve_access_request(request_id: str, approver_id: str) -> dict[str, Any]:
@@ -258,24 +866,40 @@ def approve_access_request(request_id: str, approver_id: str) -> dict[str, Any]:
             "UPDATE access_requests SET status = 'approved', approver_id = %s WHERE request_id = %s",
             (approver_id, request_id),
         )
-        grant_id = f"grant_{uuid.uuid4().hex[:8]}"
-        cur.execute(
-            "INSERT INTO grants (grant_id, session_id, scope, resource_id) VALUES (%s, %s, %s, %s)",
-            (grant_id, req["session_id"], req["requested_scope"], req["requested_resource"]),
+        grant = _insert_grant(
+            cur,
+            session_id=req["session_id"],
+            scope=req["requested_scope"],
+            resource_id=req["requested_resource"],
+            issuer=f"human:{approver_id}",
+            proof_id=req.get("proof_id") or request_id,
+            ttl_seconds=3600,
+            call_count_remaining=5,
         )
-        cur.execute(
-            "INSERT INTO session_events (event_id, session_id, event_type, event_json) VALUES (%s, %s, %s, %s)",
-            (
-                f"evt_{uuid.uuid4().hex[:8]}", req["session_id"], "access_request_approved",
-                json.dumps({"request_id": request_id, "approver_id": approver_id, "grant_id": grant_id}),
-            ),
+        _append_session_event(
+            cur,
+            req["session_id"],
+            "access_request_approved",
+            {
+                "request_id": request_id,
+                "approver_id": approver_id,
+                "grant_id": grant["grant_id"],
+                "scope": req["requested_scope"],
+                "resource_id": req["requested_resource"],
+            },
         )
         cur.execute(
             "UPDATE sessions SET status = 'active' WHERE session_id = %s",
             (req["session_id"],),
         )
     conn.close()
-    result = {"request_id": request_id, "status": "approved", "grant_id": grant_id, "approver_id": approver_id}
+    result = {
+        "request_id": request_id,
+        "status": "approved",
+        "grant_id": grant["grant_id"],
+        "approver_id": approver_id,
+        "grant": grant,
+    }
     try:
         from graph_backend import sync_graph
         rows, engine = sync_graph()
@@ -298,17 +922,55 @@ def list_access_requests(session_id: str | None = None) -> list[dict[str, Any]]:
     return rows
 
 
+def list_active_grants(session_id: str | None = None) -> list[dict[str, Any]]:
+    conn = connect()
+    with conn.cursor() as cur:
+        if session_id:
+            cur.execute(
+                """
+                SELECT *
+                FROM grants
+                WHERE session_id = %s
+                  AND call_count_remaining > 0
+                  AND (expires_at IS NULL OR expires_at > NOW())
+                """,
+                (session_id,),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT *
+                FROM grants
+                WHERE call_count_remaining > 0
+                  AND (expires_at IS NULL OR expires_at > NOW())
+                """
+            )
+        rows = list(cur.fetchall())
+    conn.close()
+    return rows
+
+
 def fetch_all_for_sync() -> dict[str, list[dict[str, Any]]]:
     conn = connect()
     data: dict[str, list] = {}
     tables = [
         "users", "teams", "user_teams", "agents", "sessions", "delegations",
         "workflow_recipes", "recipe_tools", "recipe_scopes", "resources",
-        "tool_scopes", "grants",
+        "tool_scopes", "grants", "session_recipe_similarity",
     ]
     with conn.cursor() as cur:
         for t in tables:
-            cur.execute(f"SELECT * FROM {t}")
+            if t == "grants":
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM grants
+                    WHERE call_count_remaining > 0
+                      AND (expires_at IS NULL OR expires_at > NOW())
+                    """
+                )
+            else:
+                cur.execute(f"SELECT * FROM {t}")
             data[t] = list(cur.fetchall())
         cur.execute(
             """
