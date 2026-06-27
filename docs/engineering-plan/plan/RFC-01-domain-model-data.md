@@ -20,7 +20,7 @@ Build only these tables for the 2-hour demo. Full definitions in `demo/schema.sq
 | `grants` | Ephemeral session grants |
 | `tool_scopes` | Tool → scope mapping (demo shortcut) |
 
-Recipe match in demo: **exact `goal_class` equality** (no Qdrant).
+Recipe match in demo: **exact `goal_class` equality** (no derived retrieval backend).
 
 Promotion to full RFC-01: swap SQLite → Dolt, add graph snapshot tables, credential tables, audit chain.
 
@@ -56,7 +56,7 @@ A short-lived runtime permission for the broker to resolve a credential referenc
 
 ### Memory Data Context Graph
 
-The governed graph of authorization-memory entities and typed relationships. Dolt stores canonical nodes and edges. Qdrant contributes derived semantic `similar_to` edges between session goals and accepted recipes. The gateway materializes a session context subgraph on every preflight and tool call.
+The governed graph of authorization-memory entities and typed relationships. Dolt stores canonical nodes and edges. Memgraph materializes the derived graph/retrieval view between session goals and accepted recipes. The gateway materializes a session context subgraph on every preflight and tool call.
 
 ### Session Context Subgraph
 
@@ -81,7 +81,7 @@ are in context — and how did we reach that conclusion?
 ### Design Rules
 
 - Dolt is the canonical store for graph nodes and edges.
-- Qdrant provides semantic recall; every `similar_to` edge used in a decision must be reified in `session_recipe_similarity` with `qdrant_point_id` and `dolt_commit_hash`.
+- Memgraph provides derived graph recall; every recipe hit used in a decision must be reified in `session_recipe_similarity` with `graph_node_id`, `recipe_index_commit`, and `dolt_commit_hash`.
 - The gateway builds the session context subgraph before compiling policy facts.
 - LLM judges may propose candidate graph edges with confidence; policy treats them as untrusted until validated against Dolt or accepted recipe state.
 - Graph traversal may be implemented as SQL joins over Dolt edge tables in v1. A derived graph query engine (for example CozoDB) is optional and must not become the source of truth.
@@ -115,7 +115,7 @@ are in context — and how did we reach that conclusion?
 | `runs` | User → Session | started_at | `sessions` |
 | `executes` | Agent → Session | agent_version | `sessions` |
 | `has_goal` | Session → GoalClass | raw_goal_text, goal_hash | `sessions` |
-| `similar_to` | Session → Recipe | cosine_score, rank, index_commit | Qdrant + `session_recipe_similarity` |
+| `matches_recipe` | Session → Recipe | score, rank, recipe_index_commit | Memgraph + `session_recipe_similarity` |
 | `predicts_tool` | Recipe → MCPTool | typical_order, required | `recipe_tools` |
 | `predicts_scope` | Recipe → Scope | approval_mode, max_ttl | `recipe_scopes` |
 | `predicts_credential` | Recipe → CredentialRef | binding_mode, required | `recipe_credentials` |
@@ -139,7 +139,7 @@ graph TD
   U -->|runs| S[sess_123]
   A[agent_042] -->|executes| S
   S -->|has_goal| G[sales_renewal_prep]
-  S -->|similar_to 0.89| R[recipe_sales_renewal_prep_v3]
+  S -->|matches_recipe 0.89| R[recipe_sales_renewal_prep_v3]
   R -->|predicts_tool| T1[slack.search_messages]
   R -->|predicts_tool| T2[linear.create_issue]
   T1 -->|requires_scope| SC1[slack:channels:history]
@@ -159,7 +159,7 @@ These traversals are binding contracts for the gateway fact compiler:
 
 ```text
 context.recipes_for_session(session_id)
-  Session -[similar_to]-> Recipe
+  Session -[matches_recipe]-> Recipe
   WHERE Recipe.status = 'accepted'
   AND Recipe.team_id = Session.team_id
   ORDER BY similarity DESC LIMIT 5
@@ -188,7 +188,7 @@ For each `auth.preflight_goal` call:
 ```text
 1. Start at Session(session_id)
 2. Walk member_of → Team for policy boundary
-3. Walk similar_to → Recipe via Qdrant hit reified in session_recipe_similarity
+3. Walk matches_recipe → Recipe via Memgraph/Dolt recipe hit reified in session_recipe_similarity
 4. Expand predicts_tool, predicts_scope, predicts_credential, requires_scope, targets_resource
 5. Compare required scopes against Session → granted edges
 6. Emit AccessRequest nodes for missing scopes
@@ -203,7 +203,7 @@ Most graph edges are derived from relational tables rather than stored redundant
 
 | Edge kind | Must be reified when used in a decision |
 |-----------|----------------------------------------|
-| `similar_to` | Always — via `session_recipe_similarity` |
+| `matches_recipe` | Always — via `session_recipe_similarity` |
 | `supersedes` | When comparing recipe versions |
 | `invoked` / `produced` | Always — via `session_events` and `policy_decisions` |
 | `predicts_*`, `requires_scope`, `member_of` | May be computed from relational joins in v1 |
@@ -413,7 +413,7 @@ CREATE TABLE policy_decisions (
   decision VARCHAR(64) NOT NULL,
   proof_json JSON NOT NULL,
   dolt_commit_hash VARCHAR(128) NOT NULL,
-  qdrant_hits_json JSON,
+  recipe_hits_json JSON,
   credential_lease_id VARCHAR(128),
   created_at DATETIME NOT NULL
 );
@@ -455,7 +455,8 @@ CREATE TABLE session_recipe_similarity (
   recipe_id VARCHAR(128) NOT NULL,
   similarity_score DOUBLE NOT NULL,
   rank INT NOT NULL,
-  qdrant_point_id VARCHAR(128),
+  graph_node_id VARCHAR(128),
+  recipe_index_commit VARCHAR(128),
   dolt_commit_hash VARCHAR(128) NOT NULL,
   created_at DATETIME NOT NULL,
   PRIMARY KEY (session_id, recipe_id)
@@ -476,7 +477,7 @@ CREATE TABLE session_context_snapshots (
 
 `session_context_snapshots.subgraph_json` stores the materialized nodes and edges used for a decision. The human UI and `auth.show_decision_proof` render this subgraph as the primary proof visualization.
 
-`graph_edges.provenance` must be one of: `dolt`, `qdrant`, `gateway`, `judge`.
+`graph_edges.provenance` must be one of: `dolt`, `memgraph`, `gateway`, `judge`.
 
 ## Secret Reference Rules
 
@@ -488,9 +489,9 @@ CREATE TABLE session_context_snapshots (
 
 It must not contain a decrypted token, password, private key, `.env` file, or bearer credential.
 
-## Qdrant Payloads
+## Recipe Retrieval Metadata
 
-Qdrant points are derived from accepted recipe chunks. Payloads may include:
+Recipe retrieval metadata is derived from accepted recipes and Dolt-backed graph rows. The Memgraph view may include:
 
 - `recipe_id`
 - `team_id`
@@ -504,12 +505,12 @@ Qdrant points are derived from accepted recipe chunks. Payloads may include:
 - `valid_until`
 - `dolt_commit`
 - `content_hash`
-- `embedding_model`
-- `embedding_version`
+- `graph_node_id`
+- `recipe_index_commit`
 
-Semantic recall produces candidate `similar_to` edges. The gateway must write accepted hits to `session_recipe_similarity` before those edges participate in policy facts or auto-approval.
+Recipe recall produces candidate `matches_recipe` edges. The gateway must write accepted hits to `session_recipe_similarity` before those edges participate in policy facts or auto-approval.
 
-Payloads must not include:
+Metadata must not include:
 
 - secret references if sensitive.
 - decrypted credentials.
@@ -533,4 +534,4 @@ proposal/credential-binding-linear-sales
   credential binding metadata under owner/security review
 ```
 
-Only `main` feeds the normal authorization retrieval index. Proposal branches are visible in review UI but not used for auto-approval.
+Only `main` feeds the normal authorization recipe retrieval index. Proposal branches are visible in review UI but not used for auto-approval.

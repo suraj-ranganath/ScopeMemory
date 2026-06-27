@@ -41,8 +41,41 @@ AUTH_TOOLS: list[dict[str, Any]] = [
     _tool(
         "auth.show_decision_proof",
         "Return policy decision audit trail for a session.",
-        {**SESSION_ARGS},
+        {
+            **SESSION_ARGS,
+            "decision_id": {"type": "string", "description": "Optional policy decision id"},
+        },
         ["session_id", "agent_id"],
+    ),
+    _tool(
+        "auth.request_scope",
+        "Create or refresh a human approval request for a policy-gated scope.",
+        {
+            **SESSION_ARGS,
+            **RESOURCE_ARG,
+            "tool_id": {"type": "string", "description": "Requested downstream MCP tool"},
+            "reason": {"type": "string", "description": "Safe user-facing reason for the request"},
+        },
+        ["session_id", "agent_id", "tool_id", "resource_id"],
+    ),
+    _tool(
+        "auth.explain_denial",
+        "Explain a denied policy decision without exposing secrets.",
+        {
+            **SESSION_ARGS,
+            "decision_id": {"type": "string", "description": "Optional policy decision id"},
+        },
+        ["session_id", "agent_id"],
+    ),
+    _tool(
+        "auth.submit_workflow_feedback",
+        "Record safe workflow feedback for later recipe review.",
+        {
+            **SESSION_ARGS,
+            "feedback": {"type": "string", "description": "Safe feedback text"},
+            "scenario": {"type": "string", "description": "Optional demo scenario or recipe id"},
+        },
+        ["session_id", "agent_id", "feedback"],
     ),
 ]
 

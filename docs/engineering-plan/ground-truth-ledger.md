@@ -28,7 +28,8 @@
 
 ## Canonical Conflict Resolutions
 
-- **Rough plan token vault versus zero knowledge:** The rough plan says "gateway-held token vault." The canonical plan refines this to a credential broker with opaque leases. The gateway may execute with credentials, but ScopeMemory state stores only secret references, hashes, metadata, and lease IDs. Decrypted secrets are never stored in Dolt, Qdrant, logs, UI, or agent-visible inputs.
+- **Qdrant in the rough plan versus current MVP:** The rough draft proposed Qdrant as a derived semantic recipe index. The current owner decision cuts Qdrant from the MVP. Active implementation should use Dolt canonical state plus the Memgraph-derived graph/recipe retrieval layer. Historical references above remain source-grounding for the original draft, not active requirements.
+- **Rough plan token vault versus zero knowledge:** The rough plan says "gateway-held token vault." The canonical plan refines this to a credential broker with opaque leases. The gateway may execute with credentials, but ScopeMemory state stores only secret references, hashes, metadata, and lease IDs. Decrypted secrets are never stored in Dolt, Memgraph, logs, UI, or agent-visible inputs.
 - **Datalog engine choice:** The rough plan names CozoDB or Crepe. Owner selected CozoDB for the initial policy engine on 2026-06-27.
 - **Hooks as injection mechanism:** The user requested pre-tool-use hooks for password manager credentials. The canonical plan uses hooks to enforce, block, rewrite, or route calls, not to paste decrypted secrets into tool arguments.
 - **Hackathon schedule versus engineering spec:** The rough plan includes a 40-hour build schedule. The canonical plan preserves it as an MVP sequence but separates architecture, data model, runtime, credential broker, learning, and demo plan.
@@ -46,6 +47,7 @@
 - Refine "token handling" into a zero-secret-exposure credential broker.
 - Move 1Password/password-manager integration from an add-on to a core part of the gateway, policy, audit, and data model.
 - Separate authorization memory from credential material.
+- Replace the separate vector-store plan with Dolt + Memgraph-derived recipe retrieval for the MVP.
 - Turn one rough implementation schedule into canonical subsystem RFCs and an explicit MVP line.
 
 ### NEW

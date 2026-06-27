@@ -8,9 +8,16 @@ from typing import Any
 from fastapi import HTTPException
 
 from agentic_identity.auth import resolve_delegation_token
-from gateway_service import list_policy_decisions, run_authorize, run_preflight
+from dolt_store import append_session_event, list_access_requests, list_grants
+from gateway_service import (
+    list_policy_decisions,
+    run_authorize,
+    run_preflight,
+)
 from mcp.protocol import MCP_AUTH_REQUIRED, MCP_POLICY_DENIED, tool_result_text
-from mcp.registry import AUTH_TOOL_NAMES, DOWNSTREAM_TOOL_NAMES
+from mcp.registry import DOWNSTREAM_TOOL_NAMES
+from mcp.safe_views import explain_denial, redact_decision_rows, redact_text
+from mcp.visibility import visible_tools_from_context
 from person_b.slack_fixtures import search_slack
 
 
@@ -53,13 +60,11 @@ def visible_tools_for_session(session_id: str, agent_id: str, authorization: str
     from graph_backend import preflight_context
 
     ctx = preflight_context(session_id)
-    predicted = set(ctx.get("predicted_tools") or [])
-    visible = set(AUTH_TOOL_NAMES)
-    for tool in predicted:
-        if tool in DOWNSTREAM_TOOL_NAMES:
-            visible.add(tool)
-    visible.add("slack.post_message")
-    return sorted(visible)
+    return visible_tools_from_context(
+        ctx,
+        list_access_requests(session_id),
+        list_grants(session_id),
+    )
 
 
 def handle_tool_call(
@@ -76,7 +81,56 @@ def handle_tool_call(
 
     if name == "auth.show_decision_proof":
         decisions = list_policy_decisions(session_id)
-        return tool_result_text({"session_id": session_id, "decisions": decisions})
+        decision_id = args.get("decision_id")
+        if decision_id:
+            decisions = [d for d in decisions if d.get("decision_id") == decision_id]
+        return tool_result_text({"session_id": session_id, "decisions": redact_decision_rows(decisions)})
+
+    if name == "auth.request_scope":
+        tool_id = args.get("tool_id")
+        if tool_id not in DOWNSTREAM_TOOL_NAMES:
+            raise McpHandlerError(MCP_POLICY_DENIED, "known downstream tool_id required")
+        resource_id = _resource_for_tool(tool_id, args)
+        auth = run_authorize(session_id, agent_id, tool_id, resource_id, claims)
+        return tool_result_text(
+            {
+                "session_id": session_id,
+                "tool_id": tool_id,
+                "resource_id": resource_id,
+                "decision": auth["decision"],
+                "decision_id": auth["decision_id"],
+                "check_id": auth["check_id"],
+                "check_state": auth["check_state"],
+                "reason": args.get("reason") or auth["reason"],
+                "access_request": auth.get("access_request"),
+                "grant": auth.get("grant"),
+                "proof_id": auth["proof_id"],
+            },
+            is_error=auth["decision"] in {"DENY", "REPAIR"},
+        )
+
+    if name == "auth.explain_denial":
+        decisions = redact_decision_rows(list_policy_decisions(session_id))
+        return tool_result_text(explain_denial(decisions, args.get("decision_id")))
+
+    if name == "auth.submit_workflow_feedback":
+        event = append_session_event(
+            session_id,
+            "workflow_feedback_submitted",
+            {
+                "agent_id": agent_id,
+                "feedback": args.get("feedback", ""),
+                "scenario": args.get("scenario", ""),
+            },
+        )
+        return tool_result_text(
+            {
+                "session_id": session_id,
+                "event_id": event["event_id"],
+                "event_hash": event["event_hash"],
+                "recorded": True,
+            }
+        )
 
     if name not in DOWNSTREAM_TOOL_NAMES:
         raise McpHandlerError(MCP_POLICY_DENIED, f"unknown tool: {name}")
@@ -85,12 +139,16 @@ def handle_tool_call(
     auth = run_authorize(session_id, agent_id, name, resource_id, claims)
     decision = auth["decision"]
 
-    if decision == "ALLOW":
+    if decision in {"ALLOW", "AUTO_APPROVE_EPHEMERAL_GRANT"}:
         execution = _mock_execute(name, args, resource_id)
         return tool_result_text(
             {
                 "decision": decision,
                 "decision_id": auth["decision_id"],
+                "check_id": auth["check_id"],
+                "check_state": auth["check_state"],
+                "proof_id": auth["proof_id"],
+                "grant": auth.get("grant"),
                 "execution": execution,
                 "proof_summary": {
                     "context_path": auth["proof"]["context_path"],
@@ -105,6 +163,10 @@ def handle_tool_call(
             "decision": decision,
             "reason": auth["reason"],
             "decision_id": auth["decision_id"],
+            "check_id": auth["check_id"],
+            "check_state": auth["check_state"],
+            "proof_id": auth["proof_id"],
+            "access_request": auth.get("access_request"),
             "proof_summary": {
                 "context_path": auth["proof"]["context_path"],
                 "rules": auth["proof"]["rules"],
@@ -146,7 +208,7 @@ def _mock_execute(tool_id: str, args: dict[str, Any], resource_id: str) -> dict[
     if tool_id == "slack.post_message":
         return {
             "channel": resource_id,
-            "text": args.get("text", ""),
+            "text": redact_text(args.get("text", "")),
             "status": "posted",
             "mode": "mock",
         }

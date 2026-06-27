@@ -29,7 +29,8 @@ cd platform && python3 run_mcp_demo.py
 | Seeded delegation only | `POST /iam/sessions` creates delegation |
 | Partial identity in preflight | Full `rebac_tuples` + identity proof endpoint |
 | Trust score gate at IAM only | Trust score in policy facts |
-| Qdrant (planned) | Memgraph derived graph for recipes + ReBAC |
+| Separate vector-store retrieval plan | Memgraph derived graph for recipes + ReBAC |
+| Vector-store dependency | Removed from MVP; recipe retrieval is Dolt + Memgraph-derived graph |
 
 ## Next Step
 

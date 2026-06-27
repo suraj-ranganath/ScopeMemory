@@ -69,7 +69,7 @@ class RecipeHit:
     recipe_id: str
     score: float
     dolt_commit: str
-    qdrant_index_commit: str
+    recipe_index_commit: str
     similarity_reified: bool = True
     status: str = "accepted"
 
@@ -156,7 +156,7 @@ class PolicyProofTrace:
     context_path: list[str] = field(default_factory=list)
     context_snapshot_id: str = ""
     dolt_commit: str = "demo-fixture"
-    qdrant_index_commit: str = "demo-fixture"
+    recipe_index_commit: str = "demo-fixture"
     proof_hash: str = ""
     candidate_decisions: list[dict[str, Any]] = field(default_factory=list)
     policy_engine: str = "cozo-datalog"

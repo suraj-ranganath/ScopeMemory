@@ -9,7 +9,7 @@
 1. `request` - User requested SR Code planning only for ScopeMemory.
 2. `route` - Classified as `HIGH_END`.
 3. `source-research` - Read rough plan and repo context.
-4. `external-research` - Checked current MCP, 1Password, Claude hook, Slack, Linear, Dolt, Qdrant, and policy-engine facts.
+4. `external-research` - Checked current MCP, 1Password, Claude hook, Slack, Linear, Dolt, rough-plan retrieval options, and policy-engine facts.
 5. `synthesize-v1` - Split rough idea into subsystem RFCs.
 6. `judge-v1` - Ran local adversarial judge pass.
 7. `harsh-reduction` - Cut scope to a clear MVP and integrated credential injection as a core subsystem rather than a bolt-on.

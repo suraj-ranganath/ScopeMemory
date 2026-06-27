@@ -5,10 +5,22 @@ from __future__ import annotations
 from typing import Any
 
 from agentic_iam import verify_agent_active
-from cozo_policy import decide
-from dolt_store import get_session, save_policy_decision
+from authorization_checks import AuthorizationCheckService
+from dolt_store import (
+    append_session_event,
+    create_ephemeral_grant,
+    create_or_update_access_request,
+    get_session,
+    list_access_requests,
+    list_grants,
+    save_policy_decision,
+)
 from graph_backend import authorize_context, backend_name, preflight_context, sync_graph
-from policy_contracts import contract_dict
+from mcp.visibility import visible_tools_from_context
+from policy_contracts import Decision, contract_dict, stable_hash
+
+
+AUTHZ_CHECKS = AuthorizationCheckService()
 
 
 def recipe_hits_for_session(session: dict[str, Any], session_id: str) -> tuple[list[dict[str, Any]], str]:
@@ -34,6 +46,8 @@ def run_preflight(session_id: str, agent_id: str, jwt_claims: dict[str, Any]) ->
     rows, engine = sync_graph()
     ctx = preflight_context(session_id)
     recipe_hits, retrieval_engine = recipe_hits_for_session(session, session_id)
+    access_requests = list_access_requests(session_id)
+    grants = list_grants(session_id)
     identity = {
         "identity_ref": agent["identity_ref"],
         "trust_score": agent["trust_score"],
@@ -61,6 +75,11 @@ def run_preflight(session_id: str, agent_id: str, jwt_claims: dict[str, Any]) ->
         "synced_rows": rows,
         "recipe_hits": recipe_hits,
         "recipe_retrieval": retrieval_engine,
+        "visible_tools": visible_tools_from_context(ctx, access_requests, grants),
+        "human_required_requests": [
+            req for req in access_requests if req.get("status") == "pending"
+        ],
+        "approved_grants": grants,
         **ctx,
     }
 
@@ -84,7 +103,12 @@ def run_authorize(
     if "error" in ctx:
         raise ValueError(ctx["error"])
 
-    policy_decision = decide(ctx)
+    idempotency_key = _idempotency_key(ctx)
+    check = AUTHZ_CHECKS.evaluate(context=ctx, idempotency_key=idempotency_key)
+    policy_decision = AUTHZ_CHECKS.decision_for(check.check_id)
+    if policy_decision is None:
+        raise ValueError("authorization check did not produce a policy decision")
+
     proof = {
         **contract_dict(policy_decision.proof),
         "context_path": ctx["context_path"],
@@ -106,14 +130,66 @@ def run_authorize(
         policy_decision.decision.value,
         proof,
     )
+    access_request = None
+    grant = None
+    if policy_decision.decision == Decision.ESCALATE_HUMAN:
+        access_request = create_or_update_access_request(
+            session_id=session_id,
+            user_id=session["user_id"],
+            tool_id=tool_id,
+            scope=policy_decision.required_scope,
+            resource_id=resource_id,
+            reason=policy_decision.reason,
+            recipe_id=_recipe_id_from_context(ctx),
+            proof_id=policy_decision.proof.proof_hash,
+        )
+    elif policy_decision.decision == Decision.AUTO_APPROVE_EPHEMERAL_GRANT:
+        grant = create_ephemeral_grant(
+            session_id=session_id,
+            scope=policy_decision.required_scope,
+            resource_id=resource_id,
+            issuer="policy",
+            proof_id=policy_decision.proof.proof_hash,
+            reason=policy_decision.reason,
+            ttl_seconds=900,
+            call_count_remaining=1,
+        )
 
-    return {
+    event = append_session_event(
+        session_id,
+        "policy_decision",
+        {
+            "decision_id": decision_id,
+            "check_id": check.check_id,
+            "tool_id": tool_id,
+            "resource_id": resource_id,
+            "decision": policy_decision.decision.value,
+            "proof_id": policy_decision.proof.proof_hash,
+            "access_request_id": access_request.get("request_id") if access_request else "",
+            "grant_id": grant.get("grant_id") if grant else "",
+        },
+    )
+
+    result = {
         "decision_id": decision_id,
+        "check_id": check.check_id,
+        "check_state": check.state.value,
+        "proof_id": policy_decision.proof.proof_hash,
         "decision": policy_decision.decision.value,
         "reason": policy_decision.reason,
         "proof": proof,
         "audit_store": "dolt",
+        "audit_event": {
+            "event_id": event["event_id"],
+            "event_hash": event["event_hash"],
+            "prev_event_hash": event["prev_event_hash"],
+        },
     }
+    if access_request:
+        result["access_request"] = access_request
+    if grant:
+        result["grant"] = grant
+    return result
 
 
 def list_policy_decisions(session_id: str) -> list[dict[str, Any]]:
@@ -137,3 +213,20 @@ def list_policy_decisions(session_id: str) -> list[dict[str, Any]]:
         rows = cur.fetchall()
     conn.close()
     return rows
+
+
+def _idempotency_key(ctx: dict[str, Any]) -> str:
+    facts = ctx.get("facts") or {}
+    return stable_hash({
+        "session_id": ctx.get("session_id"),
+        "tool_id": ctx.get("tool_id"),
+        "resource_id": ctx.get("resource_id"),
+        "grant_present": facts.get("grant_present"),
+        "scope": facts.get("scope"),
+        "scope_approval_mode": facts.get("scope_approval_mode"),
+    })
+
+
+def _recipe_id_from_context(ctx: dict[str, Any]) -> str:
+    path = ctx.get("context_path") or []
+    return str(path[1]) if len(path) > 1 else ""

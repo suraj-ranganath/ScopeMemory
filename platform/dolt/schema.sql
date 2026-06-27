@@ -82,7 +82,13 @@ CREATE TABLE IF NOT EXISTS grants (
   grant_id VARCHAR(128) PRIMARY KEY,
   session_id VARCHAR(128) NOT NULL,
   scope VARCHAR(255) NOT NULL,
-  resource_id VARCHAR(128) NOT NULL
+  resource_id VARCHAR(128) NOT NULL,
+  issuer VARCHAR(128) NOT NULL DEFAULT 'policy',
+  proof_id VARCHAR(128),
+  reason TEXT,
+  ttl_seconds INT NOT NULL DEFAULT 900,
+  call_count_remaining INT NOT NULL DEFAULT 1,
+  expires_at TIMESTAMP NULL
 );
 
 CREATE TABLE IF NOT EXISTS policy_decisions (
@@ -112,6 +118,7 @@ CREATE TABLE IF NOT EXISTS access_requests (
   recipe_id VARCHAR(128),
   status VARCHAR(64) NOT NULL DEFAULT 'pending',
   approver_id VARCHAR(128),
+  proof_id VARCHAR(128),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -131,6 +138,8 @@ CREATE TABLE IF NOT EXISTS session_events (
   session_id VARCHAR(128) NOT NULL,
   event_type VARCHAR(64) NOT NULL,
   event_json LONGTEXT NOT NULL,
+  prev_event_hash VARCHAR(128),
+  event_hash VARCHAR(128),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
