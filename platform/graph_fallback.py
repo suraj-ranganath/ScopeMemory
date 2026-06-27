@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from dolt_store import fetch_all_for_sync
+from grant_lifecycle import grant_row_is_active
 
 
 class InMemoryGraph:
@@ -85,7 +86,12 @@ class InMemoryGraph:
                     scope_mode = rs["approval_mode"]
         grant_present = any(
             g for g in self.data.get("grants", [])
-            if g["session_id"] == session_id and g["scope"] == ts["scope"] and g["resource_id"] == resource_id
+            if (
+                g["session_id"] == session_id
+                and g["scope"] == ts["scope"]
+                and g["resource_id"] == resource_id
+                and grant_row_is_active(g)
+            )
         )
         agents = {r["agent_id"]: r for r in self.data.get("agents", [])}
         agent = agents.get(s["agent_id"])

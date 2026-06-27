@@ -67,15 +67,15 @@ Consequence if ignored: implementers may build only a PreToolUse hook and discov
 
 Required fix before coding WP-05: make stdio launch mode an explicit integration test or demo non-goal.
 
-### P-004 - Qdrant Payload Redaction Needs Tests
+### P-004 - Recipe Index Metadata Redaction Needs Tests
 
-Problem: The plan says Qdrant payloads must not include secret refs or raw session/customer data, but does not define tests.
+Problem: The plan says recipe retrieval/index metadata must not include secret refs or raw session/customer data, but does not define tests.
 
-Evidence: `RFC-01` Qdrant payload rules and `RFC-05` indexing rules.
+Evidence: `RFC-01` recipe retrieval metadata rules and `RFC-05` indexing rules.
 
-Consequence if ignored: retrieval index could become a data leak.
+Consequence if ignored: retrieval metadata could become a data leak.
 
-Required fix before coding WP-02: add snapshot tests over payload shape.
+Required fix before coding WP-02: add snapshot tests over retrieval metadata shape.
 
 ### P-005 - Human Approval Semantics Need Exact UI State
 

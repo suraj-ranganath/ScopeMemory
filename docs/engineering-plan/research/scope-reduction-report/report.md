@@ -18,7 +18,7 @@ Reduce, reuse, crisp up the models to a clear buildable line, not speculative.
 
 - Reuse MCP tool schemas as the runtime authorization boundary.
 - Reuse Dolt for branch/diff/review semantics.
-- Reuse Qdrant only for retrieval, not authorization truth.
+- Reuse Memgraph/Dolt-derived graph retrieval only, not authorization truth.
 - Reuse password-manager secret references instead of inventing secret storage.
 - Reuse pre-tool-use hooks as an adapter, not a new core policy engine.
 
@@ -27,7 +27,7 @@ Reduce, reuse, crisp up the models to a clear buildable line, not speculative.
 The MVP is one closed loop:
 
 1. Seed Dolt with users, teams, tools, scopes, credential refs, and one accepted recipe.
-2. Index accepted recipe chunks in Qdrant.
+2. Index accepted recipe metadata in the Memgraph-derived graph.
 3. Start a session with a signed goal.
 4. Preflight predicts tools, scopes, resources, and credential binding.
 5. Auto-approve Linear issue creation; create human request for Slack customer-channel read.

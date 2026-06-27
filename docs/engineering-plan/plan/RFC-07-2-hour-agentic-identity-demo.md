@@ -14,7 +14,7 @@ Prove the Agentic Identity story in one terminal demo:
 
 Do not build in the 2-hour window:
 
-- Docker, Dolt, Qdrant, CozoDB
+- Docker, Dolt, Memgraph, CozoDB
 - 1Password / credential broker
 - MCP gateway / JSON-RPC server
 - Web UI (terminal JSON output is enough)
@@ -108,7 +108,7 @@ Binding subset of RFC-01. Implemented in `demo/schema.sql`.
 | `resources` | `resource#owned_by@team` |
 | `grants` | Ephemeral `session#grant@scope@resource` |
 
-Recipe matching in v0: **exact `goal_class` string match** (no Qdrant).
+Recipe matching in v0: **exact `goal_class` string match** (no Memgraph).
 
 ## ReBAC Edges (demo subset)
 
@@ -161,7 +161,7 @@ All must pass in under 2 hours of implementation time:
 
 When extending beyond 2 hours, promote in this order:
 
-1. Replace SQLite recipe match → Qdrant semantic match (RFC-05)
+1. Replace SQLite recipe match → Memgraph-derived recipe retrieval (RFC-05/RFC-06)
 2. Replace inline policy → CozoDB (RFC-02)
 3. Add MCP gateway wrapper (RFC-03)
 4. Swap SQLite → Dolt (RFC-01 full schema)

@@ -16,6 +16,17 @@ from policy_contracts import stable_hash
 
 SCHEMA_PATH = Path(__file__).parent / "dolt" / "schema.sql"
 
+SECRET_MARKERS = (
+    "authorization",
+    "bearer",
+    "client_secret",
+    "credential",
+    "password",
+    "private_key",
+    "secret",
+    "token",
+)
+
 
 def _json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, default=str)
@@ -30,8 +41,39 @@ def _mysql_timestamp(value: datetime) -> str:
     return value.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _scrub_sensitive(value: Any) -> Any:
+    if isinstance(value, dict):
+        cleaned: dict[str, Any] = {}
+        for key, nested in value.items():
+            lower_key = str(key).lower()
+            if any(marker in lower_key for marker in SECRET_MARKERS):
+                cleaned[str(key)] = "[redacted]"
+            else:
+                cleaned[str(key)] = _scrub_sensitive(nested)
+        return cleaned
+    if isinstance(value, list):
+        return [_scrub_sensitive(item) for item in value]
+    if isinstance(value, str):
+        lowered = value.lower()
+        if "authorization: bearer " in lowered or "op://" in lowered:
+            return "[redacted]"
+    return value
+
+
 def _ensure_runtime_columns(cur) -> None:
+    legacy_renames = [
+        "ALTER TABLE policy_decisions CHANGE qdrant_hits_json recipe_hits_json LONGTEXT",
+        "ALTER TABLE session_recipe_similarity CHANGE qdrant_index_commit recipe_index_commit VARCHAR(128) NOT NULL DEFAULT 'demo-fixture'",
+        "ALTER TABLE session_context_snapshots CHANGE qdrant_index_commit recipe_index_commit VARCHAR(128) NOT NULL DEFAULT 'demo-fixture'",
+    ]
+    for stmt in legacy_renames:
+        try:
+            cur.execute(stmt)
+        except Exception:
+            pass
+
     migrations = [
+        ("grants", "reason", "TEXT"),
         ("grants", "issuer", "VARCHAR(128) NOT NULL DEFAULT 'policy'"),
         ("grants", "proof_id", "VARCHAR(128)"),
         ("grants", "ttl_seconds", "INT NOT NULL DEFAULT 900"),
@@ -40,7 +82,7 @@ def _ensure_runtime_columns(cur) -> None:
         ("grants", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
         ("policy_decisions", "context_snapshot_id", "VARCHAR(128)"),
         ("policy_decisions", "dolt_commit_hash", "VARCHAR(128) NOT NULL DEFAULT 'demo-fixture'"),
-        ("policy_decisions", "qdrant_hits_json", "LONGTEXT"),
+        ("policy_decisions", "recipe_hits_json", "LONGTEXT"),
         ("policy_decisions", "credential_lease_id", "VARCHAR(128)"),
         ("access_requests", "agent_id", "VARCHAR(128)"),
         ("access_requests", "proof_id", "VARCHAR(128)"),
@@ -48,6 +90,9 @@ def _ensure_runtime_columns(cur) -> None:
         ("access_requests", "expires_at", "TIMESTAMP NULL"),
         ("session_events", "prev_event_hash", "VARCHAR(128)"),
         ("session_events", "event_hash", "VARCHAR(128)"),
+        ("session_recipe_similarity", "graph_node_id", "VARCHAR(128)"),
+        ("session_recipe_similarity", "recipe_index_commit", "VARCHAR(128) NOT NULL DEFAULT 'demo-fixture'"),
+        ("session_context_snapshots", "recipe_index_commit", "VARCHAR(128) NOT NULL DEFAULT 'demo-fixture'"),
     ]
     for table, column, definition in migrations:
         try:
@@ -80,13 +125,14 @@ def _append_session_event(
     event_id: str | None = None,
 ) -> dict[str, Any]:
     event_id = event_id or f"evt_{uuid.uuid4().hex[:12]}"
+    safe_body = _scrub_sensitive(body)
     previous = _latest_event_hash(cur, session_id)
     event_hash = stable_hash(
         {
             "event_id": event_id,
             "session_id": session_id,
             "event_type": event_type,
-            "body": body,
+            "body": safe_body,
             "previous_hash": previous,
         }
     )
@@ -96,13 +142,13 @@ def _append_session_event(
         (event_id, session_id, event_type, event_json, prev_event_hash, event_hash)
         VALUES (%s, %s, %s, %s, %s, %s)
         """,
-        (event_id, session_id, event_type, _json(body), previous or None, event_hash),
+        (event_id, session_id, event_type, _json(safe_body), previous or None, event_hash),
     )
     return {
         "event_id": event_id,
         "session_id": session_id,
         "event_type": event_type,
-        "body": body,
+        "body": safe_body,
         "previous_hash": previous,
         "event_hash": event_hash,
     }
@@ -116,6 +162,7 @@ def _insert_grant(
     resource_id: str,
     issuer: str,
     proof_id: str,
+    reason: str = "",
     ttl_seconds: int = 900,
     call_count_remaining: int = 1,
     grant_id: str | None = None,
@@ -126,8 +173,8 @@ def _insert_grant(
         """
         INSERT INTO grants
         (grant_id, session_id, scope, resource_id, issuer, proof_id,
-         ttl_seconds, call_count_remaining, expires_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+         reason, ttl_seconds, call_count_remaining, expires_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             grant_id,
@@ -136,6 +183,7 @@ def _insert_grant(
             resource_id,
             issuer,
             proof_id,
+            reason,
             ttl_seconds,
             call_count_remaining,
             _mysql_timestamp(expires_at),
@@ -148,6 +196,7 @@ def _insert_grant(
         "resource_id": resource_id,
         "issuer": issuer,
         "proof_id": proof_id,
+        "reason": reason,
         "ttl_seconds": ttl_seconds,
         "call_count_remaining": call_count_remaining,
         "expires_at": expires_at.isoformat().replace("+00:00", "Z"),
@@ -257,12 +306,14 @@ def seed_demo() -> None:
         "INSERT INTO workflow_recipes VALUES (%s, %s, %s, %s, %s)",
         ("recipe_sales_renewal_v3", "Sales Renewal Prep v3", "team_sales", "sales_renewal_prep", "accepted"),
     )
-    for tool in ("linear.create_issue", "slack.search_messages"):
+    for tool in ("linear.create_issue", "linear.search_issues", "linear.add_comment", "slack.search_messages"):
         cur.execute("INSERT INTO recipe_tools VALUES (%s, %s, %s)", ("recipe_sales_renewal_v3", tool, 1))
     cur.executemany(
         "INSERT INTO recipe_scopes VALUES (%s, %s, %s)",
         [
             ("recipe_sales_renewal_v3", "linear:issues:create", "auto_approve"),
+            ("recipe_sales_renewal_v3", "linear:issues:read", "auto_approve"),
+            ("recipe_sales_renewal_v3", "linear:comments:create", "auto_approve"),
             ("recipe_sales_renewal_v3", "slack:channels:history", "human_required"),
         ],
     )
@@ -278,6 +329,8 @@ def seed_demo() -> None:
         "INSERT INTO tool_scopes VALUES (%s, %s, %s)",
         [
             ("linear.create_issue", "linear:issues:create", "write"),
+            ("linear.search_issues", "linear:issues:read", "read"),
+            ("linear.add_comment", "linear:comments:create", "write"),
             ("slack.search_messages", "slack:channels:history", "read"),
             ("slack.post_message", "slack:chat:write", "write"),
         ],
@@ -290,6 +343,7 @@ def seed_demo() -> None:
         resource_id="linear_team:SALES",
         issuer="seed",
         proof_id="seed_linear_grant",
+        reason="Seeded grant for Linear issue creation",
         ttl_seconds=86400,
         call_count_remaining=10,
     )
@@ -376,7 +430,7 @@ def save_context_snapshot(
     *,
     policy_decision_id: str | None = None,
     dolt_commit_hash: str = "demo-fixture",
-    qdrant_index_commit: str = "demo-fixture",
+    recipe_index_commit: str = "demo-fixture",
 ) -> dict[str, Any]:
     snapshot_id = f"snap_{uuid.uuid4().hex[:12]}"
     fact_set_hash = stable_hash(subgraph)
@@ -386,7 +440,7 @@ def save_context_snapshot(
             """
             INSERT INTO session_context_snapshots
             (snapshot_id, session_id, phase, subgraph_json, fact_set_hash,
-             policy_decision_id, dolt_commit_hash, qdrant_index_commit)
+             policy_decision_id, dolt_commit_hash, recipe_index_commit)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
@@ -397,7 +451,7 @@ def save_context_snapshot(
                 fact_set_hash,
                 policy_decision_id,
                 dolt_commit_hash,
-                qdrant_index_commit,
+                recipe_index_commit,
             ),
         )
     conn.close()
@@ -407,7 +461,7 @@ def save_context_snapshot(
         "phase": phase,
         "fact_set_hash": fact_set_hash,
         "dolt_commit_hash": dolt_commit_hash,
-        "qdrant_index_commit": qdrant_index_commit,
+        "recipe_index_commit": recipe_index_commit,
     }
 
 
@@ -438,24 +492,22 @@ def save_recipe_hits(session_id: str, recipe_hits: list[dict[str, Any]]) -> list
                 "score": float(hit.get("score", 0)),
                 "rank_order": rank,
                 "graph_node_id": graph_node_id,
-                "qdrant_point_id": hit.get("qdrant_point_id"),
                 "dolt_commit_hash": hit.get("dolt_commit", "demo-fixture"),
-                "qdrant_index_commit": hit.get("qdrant_index_commit", "demo-fixture"),
+                "recipe_index_commit": hit.get("recipe_index_commit") or hit.get("dolt_commit", "demo-fixture"),
                 "reified": bool(hit.get("similarity_reified", True)),
             }
             cur.execute(
                 """
                 INSERT INTO session_recipe_similarity
                 (session_id, recipe_id, score, rank_order, graph_node_id,
-                 qdrant_point_id, dolt_commit_hash, qdrant_index_commit, reified)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 dolt_commit_hash, recipe_index_commit, reified)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
                   score = VALUES(score),
                   rank_order = VALUES(rank_order),
                   graph_node_id = VALUES(graph_node_id),
-                  qdrant_point_id = VALUES(qdrant_point_id),
                   dolt_commit_hash = VALUES(dolt_commit_hash),
-                  qdrant_index_commit = VALUES(qdrant_index_commit),
+                  recipe_index_commit = VALUES(recipe_index_commit),
                   reified = VALUES(reified)
                 """,
                 (
@@ -464,9 +516,8 @@ def save_recipe_hits(session_id: str, recipe_hits: list[dict[str, Any]]) -> list
                     row["score"],
                     row["rank_order"],
                     row["graph_node_id"],
-                    row["qdrant_point_id"],
                     row["dolt_commit_hash"],
-                    row["qdrant_index_commit"],
+                    row["recipe_index_commit"],
                     int(row["reified"]),
                 ),
             )
@@ -624,7 +675,7 @@ def save_policy_decision(
     *,
     context_snapshot_id: str | None = None,
     dolt_commit_hash: str = "demo-fixture",
-    qdrant_hits: list[dict[str, Any]] | None = None,
+    recipe_hits: list[dict[str, Any]] | None = None,
     credential_lease_id: str | None = None,
 ) -> str:
     decision_id = f"dec_{uuid.uuid4().hex[:12]}"
@@ -634,7 +685,7 @@ def save_policy_decision(
             """
             INSERT INTO policy_decisions
             (decision_id, session_id, tool_id, resource_id, decision, proof_json,
-             context_snapshot_id, dolt_commit_hash, qdrant_hits_json, credential_lease_id)
+             context_snapshot_id, dolt_commit_hash, recipe_hits_json, credential_lease_id)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
@@ -646,7 +697,7 @@ def save_policy_decision(
                 _json(proof),
                 context_snapshot_id,
                 dolt_commit_hash,
-                _json(qdrant_hits or []),
+                _json(recipe_hits or []),
                 credential_lease_id,
             ),
         )
@@ -661,6 +712,7 @@ def issue_ephemeral_grant(
     *,
     issuer: str,
     proof_id: str,
+    reason: str = "",
     ttl_seconds: int = 900,
     call_count_remaining: int = 1,
 ) -> dict[str, Any]:
@@ -673,6 +725,7 @@ def issue_ephemeral_grant(
             resource_id=resource_id,
             issuer=issuer,
             proof_id=proof_id,
+            reason=reason,
             ttl_seconds=ttl_seconds,
             call_count_remaining=call_count_remaining,
         )
@@ -686,6 +739,7 @@ def issue_ephemeral_grant(
                 "resource_id": resource_id,
                 "issuer": issuer,
                 "proof_id": proof_id,
+                "reason": reason,
                 "ttl_seconds": ttl_seconds,
                 "call_count_remaining": call_count_remaining,
             },
@@ -873,6 +927,7 @@ def approve_access_request(request_id: str, approver_id: str) -> dict[str, Any]:
             resource_id=req["requested_resource"],
             issuer=f"human:{approver_id}",
             proof_id=req.get("proof_id") or request_id,
+            reason=req.get("reason") or "",
             ttl_seconds=3600,
             call_count_remaining=5,
         )
@@ -948,6 +1003,65 @@ def list_active_grants(session_id: str | None = None) -> list[dict[str, Any]]:
         rows = list(cur.fetchall())
     conn.close()
     return rows
+
+
+def list_grants(session_id: str | None = None, active_only: bool = False) -> list[dict[str, Any]]:
+    if active_only:
+        return list_active_grants(session_id)
+    conn = connect()
+    with conn.cursor() as cur:
+        if session_id:
+            cur.execute("SELECT * FROM grants WHERE session_id = %s", (session_id,))
+        else:
+            cur.execute("SELECT * FROM grants")
+        rows = list(cur.fetchall())
+    conn.close()
+    return rows
+
+
+def find_active_grant(session_id: str, scope: str, resource_id: str) -> dict[str, Any] | None:
+    conn = connect()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT *
+            FROM grants
+            WHERE session_id = %s
+              AND scope = %s
+              AND resource_id = %s
+              AND call_count_remaining > 0
+              AND (expires_at IS NULL OR expires_at > NOW())
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (session_id, scope, resource_id),
+        )
+        row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def find_active_grant_for_tool(session_id: str, tool_id: str, resource_id: str) -> dict[str, Any] | None:
+    conn = connect()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT g.*
+            FROM grants g
+            JOIN tool_scopes ts ON ts.scope = g.scope
+            WHERE g.session_id = %s
+              AND ts.tool_id = %s
+              AND g.resource_id = %s
+              AND g.call_count_remaining > 0
+              AND (g.expires_at IS NULL OR g.expires_at > NOW())
+            ORDER BY g.created_at DESC
+            LIMIT 1
+            """,
+            (session_id, tool_id, resource_id),
+        )
+        row = cur.fetchone()
+    conn.close()
+    return row
 
 
 def fetch_all_for_sync() -> dict[str, list[dict[str, Any]]]:

@@ -106,7 +106,7 @@ def sync_to_memgraph() -> int:
                     m.rank_order = $rank_order,
                     m.reified = $reified,
                     m.dolt_commit_hash = $dolt_commit_hash,
-                    m.qdrant_index_commit = $qdrant_index_commit
+                    m.recipe_index_commit = $recipe_index_commit
                 """,
                 sid=row["session_id"],
                 rid=row["recipe_id"],
@@ -114,7 +114,7 @@ def sync_to_memgraph() -> int:
                 rank_order=int(row["rank_order"]),
                 reified=bool(row["reified"]),
                 dolt_commit_hash=row["dolt_commit_hash"],
-                qdrant_index_commit=row["qdrant_index_commit"],
+                recipe_index_commit=row["recipe_index_commit"],
             )
         for row in data["recipe_tools"]:
             session.run(

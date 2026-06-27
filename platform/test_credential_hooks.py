@@ -67,6 +67,21 @@ class HookAdapterTests(unittest.TestCase):
         self.assertEqual(intent.secret_access_pattern, SecretAccessPattern.SECRET_IN_INPUT)
         self.assertEqual(evaluate_hook_intent(intent).decision.value, "DENY")
 
+    def test_safe_shell_call_can_be_routed_through_exec_wrapper(self) -> None:
+        intent = normalize_pre_tool_use("codex", {
+            "tool_name": "Bash",
+            "tool_input": {"command": "curl https://api.linear.app/graphql"},
+        })
+
+        decision = evaluate_hook_intent(intent, lease_id="lease_safe_123")
+        output = codex_pre_tool_use_output(decision)
+
+        self.assertEqual(output["hookSpecificOutput"]["permissionDecision"], "allow")
+        self.assertEqual(decision.route, "scopememory_exec")
+        rewritten = output["hookSpecificOutput"]["updatedInput"]["command"]
+        self.assertTrue(rewritten.startswith("scopememory exec --lease lease_safe_123 -- "))
+        self.assertNotIn("op://", rewritten)
+
 
 class CredentialBrokerTests(unittest.TestCase):
     def test_broker_does_not_mint_when_provider_unavailable(self) -> None:

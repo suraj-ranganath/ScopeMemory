@@ -50,7 +50,7 @@ Relevant facts:
 - `op inject` can render files with plaintext secrets. That is only safe inside a broker-owned temporary boundary with strict cleanup and redaction.
 - 1Password recommends service accounts for least-privilege CLI access.
 
-ScopeMemory implication: the agent must not call `op read` directly. The broker may use CLI resolution only after a valid credential lease, and only inside a trusted execution boundary that prevents secret values from entering model-visible output, Beads, Dolt, Qdrant, UI fixtures, or logs.
+ScopeMemory implication: the agent must not call `op read` directly. The broker may use CLI resolution only after a valid credential lease, and only inside a trusted execution boundary that prevents secret values from entering model-visible output, Beads, Dolt, Memgraph, UI fixtures, or logs.
 
 ### 1Password SDKs
 

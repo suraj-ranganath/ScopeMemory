@@ -7,7 +7,7 @@ The project should use the phrase "zero knowledge" carefully. In v1, ScopeMemory
 - The agent does not see decrypted credentials.
 - The model transcript does not contain decrypted credentials.
 - Tool input visible to the model does not contain decrypted credentials.
-- Dolt, Qdrant, audit logs, and UI do not contain decrypted credentials.
+- Dolt, Memgraph, audit logs, and UI do not contain decrypted credentials.
 - Secret values are resolved only inside a trusted execution boundary and only for an authorized call.
 
 This is not a claim that the gateway can call a bearer-token API without any trusted component seeing a bearer token. That requires downstream token exchange, workload identity, signing protocols, or hardware isolation. The product should be precise and earn trust.

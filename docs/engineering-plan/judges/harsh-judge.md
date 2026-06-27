@@ -82,7 +82,7 @@ Sales renewal prep
   -> execute
   -> deny external Slack post
   -> propose recipe update
-  -> show Dolt diff and Qdrant refresh
+  -> show Dolt diff and Memgraph recipe-index refresh
 ```
 
 ## Reuse Decisions
@@ -90,7 +90,7 @@ Sales renewal prep
 - MCP schemas are already the right boundary.
 - 1Password references are already the right abstraction for secrets.
 - Dolt is already the right review surface for policy memory.
-- Qdrant is already the right retrieval cache.
+- Memgraph/Dolt-derived graph retrieval is the current MVP retrieval cache.
 - PreToolUse hooks are already the right client-side interception point where available.
 
 ## Over-Broad Areas To Watch

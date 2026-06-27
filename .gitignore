@@ -13,3 +13,4 @@ __pycache__/
 node_modules/
 platform/web/dist/
 platform/web/.vite/
+*.tsbuildinfo

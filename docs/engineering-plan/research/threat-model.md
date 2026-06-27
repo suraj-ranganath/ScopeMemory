@@ -17,7 +17,7 @@
 - Credential broker boundary: trusted execution boundary for secret resolution.
 - Password manager boundary: source of credential truth.
 - Dolt main branch: canonical governed state.
-- Qdrant index: derived, non-authoritative cache.
+- Memgraph recipe retrieval/index: derived, non-authoritative graph cache.
 - Human approver boundary: authority for high-risk and uncertain grants.
 
 ## Attacker Goals
@@ -25,9 +25,9 @@
 - Make the agent call a tool outside the signed goal.
 - Exfiltrate customer data to an external Slack channel or arbitrary URL.
 - Trick the agent into requesting broad scopes.
-- Get raw credentials into model context, shell output, logs, Dolt, Qdrant, or UI.
+- Get raw credentials into model context, shell output, logs, Dolt, Memgraph, or UI.
 - Poison recipes through successful-looking but unsafe sessions.
-- Exploit a stale Qdrant index to retrieve deprecated recipes.
+- Exploit a stale recipe index to retrieve deprecated recipes.
 - Replay or extend an ephemeral grant after TTL.
 - Bypass policy by directly invoking `op read`, `gh auth token`, or similar secret commands.
 
@@ -41,7 +41,7 @@
 - Credential leases bound to session, tool, scope, resource, TTL, and caller.
 - Hook rules that block direct secret retrieval and command-line leaks.
 - Hash-chained session events.
-- Policy decisions tied to Dolt commit and Qdrant index build commit.
+- Policy decisions tied to Dolt commit and recipe index/sync commit.
 - Accepted recipes only in normal retrieval.
 - Proposed recipes isolated from auto-approval until reviewed.
 

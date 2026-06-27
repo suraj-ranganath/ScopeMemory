@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -71,6 +72,7 @@ class HookAdapterDecision:
     updated_input: dict[str, Any] | None = None
     lease_id: str = ""
     access_request_id: str = ""
+    route: str = "host_tool"
 
 
 def normalize_pre_tool_use(host: str, payload: dict[str, Any]) -> NormalizedHookIntent:
@@ -94,7 +96,7 @@ def normalize_pre_tool_use(host: str, payload: dict[str, Any]) -> NormalizedHook
     )
 
 
-def evaluate_hook_intent(intent: NormalizedHookIntent) -> HookAdapterDecision:
+def evaluate_hook_intent(intent: NormalizedHookIntent, lease_id: str = "") -> HookAdapterDecision:
     if intent.secret_access_pattern == SecretAccessPattern.DIRECT_SECRET_READ:
         return HookAdapterDecision(
             decision=Decision.DENY,
@@ -115,7 +117,24 @@ def evaluate_hook_intent(intent: NormalizedHookIntent) -> HookAdapterDecision:
             decision=Decision.DENY,
             safe_reason="command appears to write decrypted credentials to a file",
         )
+    if lease_id and _command_text(intent.tool_name, intent.tool_input):
+        return HookAdapterDecision(
+            decision=Decision.ALLOW,
+            safe_reason="tool call routed through ScopeMemory execution wrapper",
+            updated_input=rewrite_for_scope_memory_execution(intent, lease_id),
+            lease_id=lease_id,
+            route="scopememory_exec",
+        )
     return HookAdapterDecision(decision=Decision.ALLOW, safe_reason="no broker bypass detected")
+
+
+def rewrite_for_scope_memory_execution(intent: NormalizedHookIntent, lease_id: str) -> dict[str, Any]:
+    command = _command_text(intent.tool_name, intent.tool_input)
+    if not command:
+        return dict(intent.tool_input)
+    updated = dict(intent.tool_input)
+    updated["command"] = f"scopememory exec --lease {shlex.quote(lease_id)} -- {command}"
+    return updated
 
 
 def claude_pre_tool_use_output(decision: HookAdapterDecision) -> dict[str, Any]:

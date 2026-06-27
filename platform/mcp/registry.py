@@ -41,7 +41,10 @@ AUTH_TOOLS: list[dict[str, Any]] = [
     _tool(
         "auth.show_decision_proof",
         "Return policy decision audit trail for a session.",
-        {**SESSION_ARGS},
+        {
+            **SESSION_ARGS,
+            "decision_id": {"type": "string", "description": "Optional policy decision id"},
+        },
         ["session_id", "agent_id"],
     ),
     _tool(
@@ -68,6 +71,17 @@ AUTH_TOOLS: list[dict[str, Any]] = [
         },
         ["session_id", "agent_id"],
     ),
+    _tool(
+        "auth.submit_workflow_feedback",
+        "Submit bounded workflow feedback for future recipe/policy tuning.",
+        {
+            **SESSION_ARGS,
+            "decision_id": {"type": "string", "description": "Decision being reviewed"},
+            "outcome": {"type": "string", "description": "accepted, rejected, repaired, or noisy"},
+            "note": {"type": "string", "description": "Safe non-secret feedback note"},
+        },
+        ["session_id", "agent_id", "decision_id", "outcome"],
+    ),
 ]
 
 DOWNSTREAM_TOOLS: list[dict[str, Any]] = [
@@ -81,6 +95,27 @@ DOWNSTREAM_TOOLS: list[dict[str, Any]] = [
             "description": {"type": "string", "description": "Issue body"},
         },
         ["session_id", "agent_id", "resource_id", "title"],
+    ),
+    _tool(
+        "linear.search_issues",
+        "Search Linear issues (policy-gated; mock execution in demo).",
+        {
+            **SESSION_ARGS,
+            **RESOURCE_ARG,
+            "query": {"type": "string", "description": "Search query"},
+        },
+        ["session_id", "agent_id", "resource_id", "query"],
+    ),
+    _tool(
+        "linear.add_comment",
+        "Add a Linear issue comment (policy-gated; mock execution in demo).",
+        {
+            **SESSION_ARGS,
+            **RESOURCE_ARG,
+            "issue_id": {"type": "string", "description": "Issue id"},
+            "body": {"type": "string", "description": "Comment body"},
+        },
+        ["session_id", "agent_id", "resource_id", "issue_id", "body"],
     ),
     _tool(
         "slack.search_messages",

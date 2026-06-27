@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-ScopeMemory should be designed as an authorization control plane that learns from successful agent workflows. The system predicts the narrow access an agent will likely need, creates or requests short-lived grants, enforces every actual MCP tool call, and records a proof-backed audit trail. The rough plan is directionally strong: Dolt is canonical state, Qdrant is derived retrieval, deterministic policy makes decisions, and the MCP gateway is the runtime boundary.
+ScopeMemory should be designed as an authorization control plane that learns from successful agent workflows. The system predicts the narrow access an agent will likely need, creates or requests short-lived grants, enforces every actual MCP tool call, and records a proof-backed audit trail. The rough plan is directionally strong: Dolt is canonical state, retrieval is derived and non-authoritative, deterministic policy makes decisions, and the MCP gateway is the runtime boundary. The current MVP uses Memgraph-derived graph/recipe retrieval rather than a separate vector store.
 
 The main addition is credential handling. Password manager integration must not be a side path. It must be part of the authorization model:
 
@@ -45,7 +45,7 @@ Research was read-only. Sources checked:
 Build ScopeMemory around six subsystems:
 
 1. Product and architecture: gateway, policy, memory, credential broker, UI.
-2. Domain model and data: Dolt canonical tables and Qdrant derived indexes.
+2. Domain model and data: Dolt canonical tables and Memgraph-derived graph/retrieval indexes.
 3. Authorization policy and proofs: deterministic decisions over typed facts.
 4. MCP gateway runtime: tools/list, tools/call, preflight, dynamic catalog, downstream execution.
 5. Zero-knowledge credential broker and hooks: 1Password/password-manager integration through opaque leases.

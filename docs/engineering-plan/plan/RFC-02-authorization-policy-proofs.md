@@ -30,7 +30,7 @@ Policy is the only authority for runtime access. It decides over typed facts. Fa
 - MCP tool schema validation.
 - resource metadata.
 - Memory Data Context Graph traversals and session context snapshots.
-- Qdrant recipe hits reified in `session_recipe_similarity`.
+- recipe retrieval hits reified from Dolt/Memgraph metadata.
 - Dolt recipes and policies.
 - current grants.
 - human approvals.
@@ -115,7 +115,7 @@ judge_exfiltration_risk("request_123", false, 0.80).
 Graph facts are compiled from `session_context_snapshots.subgraph_json` and reified similarity rows. They are preferred over ad hoc recipe facts when both are available.
 
 ```prolog
-graph_edge("sess_123", "similar_to", "recipe_sales_renewal_prep_v3", 0.89).
+graph_edge("sess_123", "matches_recipe", "recipe_sales_renewal_prep_v3", 0.89).
 graph_edge("recipe_sales_renewal_prep_v3", "predicts_scope", "linear:issues:create", 1.0).
 graph_edge("linear_team:SALES", "owned_by", "team_sales", 1.0).
 graph_edge("sess_123", "granted", "linear:issues:create", 1.0).
@@ -131,7 +131,7 @@ context_path("sess_123", "linear.create_issue", [
 context_snapshot("sess_123", "snap_preflight_001", "preflight").
 ```
 
-`similar_recipe/3` facts must be derivable from a reified `graph_edge/4` with kind `similar_to` tied to a `session_recipe_similarity` row and matching Dolt commit.
+`similar_recipe/3` facts must be derivable from a reified `graph_edge/4` with kind `matches_recipe` tied to a `session_recipe_similarity` row and matching Dolt commit.
 
 ## Decision Rules
 
@@ -149,7 +149,7 @@ recipe_predicts_scope(Session, Scope) :-
   recipe_scope(Recipe, Scope).
 
 recipe_predicts_scope(Session, Scope) :-
-  graph_edge(Session, "similar_to", Recipe, Score),
+  graph_edge(Session, "matches_recipe", Recipe, Score),
   Score >= 0.82,
   recipe_status(Recipe, "accepted"),
   graph_edge(Recipe, "predicts_scope", Scope, _).
@@ -161,7 +161,7 @@ recipe_predicts_tool(Session, Tool) :-
   recipe_tool(Recipe, Tool).
 
 recipe_predicts_tool(Session, Tool) :-
-  graph_edge(Session, "similar_to", Recipe, Score),
+  graph_edge(Session, "matches_recipe", Recipe, Score),
   Score >= 0.82,
   recipe_status(Recipe, "accepted"),
   graph_edge(Recipe, "predicts_tool", Tool, _).
@@ -229,8 +229,8 @@ Hard deny when any is true:
 - command directly reads password-manager secrets outside the broker.
 - command writes decrypted credentials to disk.
 - hook rewrite would expose a secret to agent-visible input.
-- Qdrant hit is not tied to the current accepted Dolt commit or allowed index build.
-- `similar_to` edge is not reified in `session_recipe_similarity`.
+- recipe retrieval hit is not tied to the current accepted Dolt commit or allowed recipe-index build.
+- recipe-match edge is not reified in `session_recipe_similarity`.
 - no valid `context_path/3` exists for the requested tool when graph snapshot is present.
 
 ## Auto-Approval Requirements
@@ -271,7 +271,7 @@ A proof trace is a structured explanation, not necessarily a formal proof object
   ],
   "facts": [
     "session_team(sess_123, sales)",
-    "graph_edge(sess_123, similar_to, recipe_sales_renewal_prep_v3, 0.89)",
+    "graph_edge(sess_123, matches_recipe, recipe_sales_renewal_prep_v3, 0.89)",
     "graph_edge(recipe_sales_renewal_prep_v3, predicts_scope, linear:issues:create, 1.0)",
     "team_allowed_scope(sales, linear:issues:create)",
     "resource_team(linear_team:SALES, sales)",
@@ -287,7 +287,7 @@ A proof trace is a structured explanation, not necessarily a formal proof object
     "auto_approve_ephemeral_grant"
   ],
   "dolt_commit": "abc123",
-  "qdrant_index_commit": "abc123",
+  "recipe_index_commit": "abc123",
   "proof_hash": "sha256:..."
 }
 ```

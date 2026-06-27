@@ -5,11 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 from agentic_iam import verify_agent_active
-from cozo_policy import decide
+from authorization_checks import AuthorizationCheckService
 from dolt_store import (
     append_session_event,
     attach_decision_to_snapshot,
     create_access_request,
+    find_active_grant_for_tool,
     get_session,
     issue_ephemeral_grant,
     list_access_requests,
@@ -20,7 +21,10 @@ from dolt_store import (
     save_recipe_hits,
 )
 from graph_backend import authorize_context, backend_name, preflight_context, sync_graph
-from policy_contracts import contract_dict
+from policy_contracts import Decision, contract_dict, stable_hash
+
+
+AUTHZ_CHECKS = AuthorizationCheckService()
 
 
 def recipe_hits_for_session(session: dict[str, Any], session_id: str) -> tuple[list[dict[str, Any]], str]:
@@ -39,9 +43,9 @@ def _commit_from_hits(recipe_hits: list[dict[str, Any]]) -> str:
     return str(recipe_hits[0].get("dolt_commit") or "demo-fixture") if recipe_hits else "demo-fixture"
 
 
-def _qdrant_commit_from_hits(recipe_hits: list[dict[str, Any]]) -> str:
+def _recipe_index_commit_from_hits(recipe_hits: list[dict[str, Any]]) -> str:
     return (
-        str(recipe_hits[0].get("qdrant_index_commit") or recipe_hits[0].get("dolt_commit") or "demo-fixture")
+        str(recipe_hits[0].get("recipe_index_commit") or recipe_hits[0].get("dolt_commit") or "demo-fixture")
         if recipe_hits
         else "demo-fixture"
     )
@@ -120,7 +124,7 @@ def run_preflight(session_id: str, agent_id: str, jwt_claims: dict[str, Any]) ->
         "preflight",
         snapshot_payload,
         dolt_commit_hash=_commit_from_hits(recipe_hits),
-        qdrant_index_commit=_qdrant_commit_from_hits(recipe_hits),
+        recipe_index_commit=_recipe_index_commit_from_hits(recipe_hits),
     )
     graph_projection = record_context_graph(
         session_id,
@@ -217,21 +221,21 @@ def run_authorize(
         "authorize",
         snapshot_payload,
         dolt_commit_hash=_commit_from_hits(recipe_hits),
-        qdrant_index_commit=_qdrant_commit_from_hits(recipe_hits),
+        recipe_index_commit=_recipe_index_commit_from_hits(recipe_hits),
     )
     facts = dict(ctx.get("facts") or {})
     facts.update({
         "context_snapshot_present": True,
         "context_snapshot_id": snapshot["snapshot_id"],
         "dolt_commit": snapshot["dolt_commit_hash"],
-        "qdrant_index_commit": snapshot["qdrant_index_commit"],
+        "recipe_index_commit": snapshot["recipe_index_commit"],
     })
     ctx = {
         **ctx,
         "facts": facts,
         "context_snapshot_id": snapshot["snapshot_id"],
         "dolt_commit": snapshot["dolt_commit_hash"],
-        "qdrant_index_commit": snapshot["qdrant_index_commit"],
+        "recipe_index_commit": snapshot["recipe_index_commit"],
     }
     graph_projection = record_context_graph(
         session_id,
@@ -241,9 +245,26 @@ def run_authorize(
         snapshot_id=snapshot["snapshot_id"],
     )
 
-    policy_decision = decide(ctx)
+    idempotency_key = _idempotency_key(ctx)
+    append_session_event(
+        session_id,
+        "authorization_check_requested",
+        {
+            "tool_id": tool_id,
+            "resource_id": resource_id,
+            "snapshot_id": snapshot["snapshot_id"],
+            "idempotency_key": idempotency_key,
+        },
+    )
+    check = AUTHZ_CHECKS.evaluate(context=ctx, idempotency_key=idempotency_key)
+    policy_decision = AUTHZ_CHECKS.decision_for(check.check_id)
+    if policy_decision is None:
+        raise ValueError("authorization check did not produce a policy decision")
+
     proof = {
         **contract_dict(policy_decision.proof),
+        "check_id": check.check_id,
+        "check_state": check.state.value,
         "context_path": ctx["context_path"],
         "context_snapshot_id": snapshot["snapshot_id"],
         "fact_set_hash": snapshot["fact_set_hash"],
@@ -268,7 +289,7 @@ def run_authorize(
         proof,
         context_snapshot_id=snapshot["snapshot_id"],
         dolt_commit_hash=snapshot["dolt_commit_hash"],
-        qdrant_hits=recipe_hits,
+        recipe_hits=recipe_hits,
         credential_lease_id=(
             policy_decision.credential_lease.lease_id
             if policy_decision.credential_lease
@@ -281,6 +302,8 @@ def run_authorize(
         "policy_decision_recorded",
         {
             "decision_id": decision_id,
+            "check_id": check.check_id,
+            "check_state": check.state.value,
             "decision": policy_decision.decision.value,
             "tool_id": tool_id,
             "resource_id": resource_id,
@@ -291,19 +314,20 @@ def run_authorize(
 
     grant = None
     access_request = None
-    if policy_decision.decision.value == "AUTO_APPROVE_EPHEMERAL_GRANT":
+    if policy_decision.decision == Decision.AUTO_APPROVE_EPHEMERAL_GRANT:
         grant = issue_ephemeral_grant(
             session_id,
             policy_decision.required_scope or facts.get("scope", ""),
             resource_id,
             issuer="policy:auto_approve",
             proof_id=policy_decision.proof.proof_hash,
+            reason=policy_decision.reason,
         )
         try:
             sync_graph()
         except Exception:
             pass
-    elif policy_decision.decision.value == "ESCALATE_HUMAN":
+    elif policy_decision.decision == Decision.ESCALATE_HUMAN:
         access_request = create_access_request(
             session_id=session_id,
             user_id=str(facts.get("user_id") or session["user_id"]),
@@ -315,9 +339,14 @@ def run_authorize(
             recipe_id=_recipe_id_from_ctx(ctx),
             proof_id=policy_decision.proof.proof_hash,
         )
+    elif policy_decision.decision == Decision.ALLOW:
+        grant = find_active_grant_for_tool(session_id, tool_id, resource_id)
 
     return {
         "decision_id": decision_id,
+        "check_id": check.check_id,
+        "check_state": check.state.value,
+        "proof_id": policy_decision.proof.proof_hash,
         "decision": policy_decision.decision.value,
         "reason": policy_decision.reason,
         "proof": proof,
@@ -352,3 +381,16 @@ def list_policy_decisions(session_id: str) -> list[dict[str, Any]]:
         rows = cur.fetchall()
     conn.close()
     return rows
+
+
+def _idempotency_key(ctx: dict[str, Any]) -> str:
+    facts = ctx.get("facts") or {}
+    return stable_hash({
+        "session_id": ctx.get("session_id") or facts.get("session_id"),
+        "tool_id": ctx.get("tool_id") or facts.get("tool_id"),
+        "resource_id": ctx.get("resource_id") or facts.get("resource_id"),
+        "scope": facts.get("scope"),
+        "grant_present": facts.get("grant_present"),
+        "context_path": ctx.get("context_path") or [],
+        "recipe_index_commit": ctx.get("recipe_index_commit") or facts.get("recipe_index_commit"),
+    })

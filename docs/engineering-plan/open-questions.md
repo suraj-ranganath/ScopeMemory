@@ -10,7 +10,7 @@ Reason: a gateway that calls Slack, Linear, GitHub, or a shell command must even
 
 - The agent never sees decrypted credentials.
 - The model transcript never contains decrypted credentials.
-- Dolt, Qdrant, audit logs, and UI never store decrypted credentials.
+- Dolt, Memgraph, audit logs, and UI never store decrypted credentials.
 - Hooks never rewrite model-visible tool input with decrypted credentials.
 - The password manager or credential broker resolves a secret only inside the execution boundary and only for a short-lived authorized call.
 

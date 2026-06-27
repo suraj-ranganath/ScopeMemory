@@ -6,7 +6,7 @@ Plan ready for implementation authorization.
 
 ## Goal
 
-Integrate credentials from password managers such as 1Password into ScopeMemory without exposing decrypted credentials to the agent, model transcript, project files, Dolt, Qdrant, audit logs, or UI.
+Integrate credentials from password managers such as 1Password into ScopeMemory without exposing decrypted credentials to the agent, model transcript, project files, Dolt, Memgraph, audit logs, or UI.
 
 ## Precise Claim
 

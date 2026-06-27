@@ -27,7 +27,7 @@ Total: 54/60
 
 ## Summary
 
-The research package correctly identifies the project as memory-informed authorization rather than generic retrieval. It grounds the major design pieces in the rough plan: Dolt as canonical state, Qdrant as derived retrieval, deterministic policy, MCP gateway enforcement, LLM judges as non-authoritative fact emitters, and prompt-injection defense.
+The research package correctly identifies the project as memory-informed authorization rather than generic retrieval. It grounds the major design pieces in the rough plan: Dolt as canonical state, derived retrieval, deterministic policy, MCP gateway enforcement, LLM judges as non-authoritative fact emitters, and prompt-injection defense. Current MVP planning uses Memgraph/Dolt-derived graph retrieval instead of the rough plan's separate vector-store path.
 
 The research also makes the necessary credential correction: "gateway-held token vault" is too imprecise for the user's zero-knowledge requirement. The proposed broker, secret reference, credential binding, and lease model is the right way to integrate 1Password and pre-tool-use hooks without creating an accidental secret-exfiltration path.
 

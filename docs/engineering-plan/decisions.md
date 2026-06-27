@@ -8,9 +8,9 @@
 **Affected:** RFC-00, RFC-01, RFC-02, RFC-05.
 **Status:** active
 
-### D-SCM-002 - 2026-06-27 - Dolt Is Canonical, Qdrant Is Derived
-**Decision:** Dolt owns canonical authorization state: recipes, policies, tool mappings, grants, approvals, credential reference metadata, and audit event hashes. Qdrant is a derived retrieval index over accepted recipes and non-secret recipe chunks.
-**Reason:** Authorization state needs branch, diff, review, merge, and historical audit semantics. Vector retrieval needs fast semantic recall with payload filters, but it must not become the source of truth.
+### D-SCM-002 - 2026-06-27 - Dolt Is Canonical, Memgraph Is Derived
+**Decision:** Dolt owns canonical authorization state: recipes, policies, tool mappings, grants, approvals, credential reference metadata, and audit event hashes. Memgraph is the MVP derived graph/retrieval layer over accepted recipes, session context, ReBAC edges, and non-secret recipe metadata. Qdrant is not required for the MVP.
+**Reason:** Authorization state needs branch, diff, review, merge, and historical audit semantics. The demo needs explainable recipe recall and graph traversal more than a separate vector store; keeping retrieval inside the Dolt -> Memgraph path reduces moving parts while preserving the "retrieval is not authority" boundary.
 **Affected:** RFC-01, RFC-05.
 **Status:** active
 
@@ -21,7 +21,7 @@
 **Status:** active
 
 ### D-SCM-004 - 2026-06-27 - Credentials Are Brokered Through Opaque Leases
-**Decision:** Password-manager credentials, including 1Password secrets, are never materialized into agent-visible tool input, model context, Dolt rows, Qdrant payloads, UI, or audit logs. ScopeMemory stores secret references and credential metadata; execution uses opaque short-lived credential leases resolved only inside the broker or gateway execution boundary.
+**Decision:** Password-manager credentials, including 1Password secrets, are never materialized into agent-visible tool input, model context, Dolt rows, Memgraph payloads, UI, or audit logs. ScopeMemory stores secret references and credential metadata; execution uses opaque short-lived credential leases resolved only inside the broker or gateway execution boundary.
 **Reason:** The user explicitly requested password-manager integration through pre-tool-use hooks and zero-knowledge treatment. Injecting decrypted secrets directly through a hook would violate that requirement because hook inputs and rewritten tool inputs can become model-visible or logged.
 **Affected:** RFC-01, RFC-02, RFC-03, RFC-04, RFC-05.
 **Status:** active
@@ -33,13 +33,13 @@
 **Status:** active
 
 ### D-SCM-008 - 2026-06-27 - Authorization Memory Is A Context Graph
-**Decision:** ScopeMemory models authorization memory as a Memory Data Context Graph. Dolt stores canonical graph nodes, edges, session recipe similarity reifications, and session context snapshots. Qdrant produces candidate semantic `similar_to` edges only; hits used in decisions must be reified in Dolt before policy evaluation. The gateway materializes a session context subgraph on every preflight and tool call, projects it to Datalog facts, and requires a valid `context_path` for allow/auto-approve decisions when a snapshot exists.
+**Decision:** ScopeMemory models authorization memory as a Memory Data Context Graph. Dolt stores canonical graph nodes, edges, recipe matches, and session context snapshots. Memgraph materializes the derived graph/retrieval view used for recipe recall and ReBAC traversals. Any recipe hit used in a decision must be reified back to Dolt metadata before policy evaluation. The gateway materializes a session context subgraph on every preflight and tool call, projects it to Datalog facts, and requires a valid `context_path` for allow/auto-approve decisions when a snapshot exists.
 **Reason:** Recipes, scopes, grants, and sessions are relational. A flat recipe blob cannot explain why access was predicted or prove memory-consistency. The context graph makes traversals explicit, auditable, and renderable in the proof UI.
 **Affected:** RFC-00, RFC-01, RFC-02, RFC-03, RFC-05.
 **Status:** active
 
 ### D-SCM-006 - 2026-06-27 - MVP Proves The Full Loop With Narrow Surfaces
-**Decision:** The first build proves one end-to-end lifecycle: preflight, access request, credential lease, gateway enforcement, audit proof, prompt-injection denial, recipe proposal, Dolt diff, and Qdrant refresh. It uses two downstream services: Linear and Slack or Slack-mock.
+**Decision:** The first build proves one end-to-end lifecycle: preflight, access request, credential lease, gateway enforcement, audit proof, prompt-injection denial, recipe proposal, Dolt diff, and Memgraph recipe retrieval refresh. It uses two downstream services: Linear and Slack or Slack-mock.
 **Reason:** Building every integration, every secret provider, and a formal proof engine would obscure the product thesis. The MVP must show the whole control loop with a small number of surfaces.
 **Affected:** RFC-06.
 **Status:** superseded by D-SCM-009 for first build; reactivated for Phase 2
@@ -51,7 +51,7 @@
 **Status:** active — Phase 2 only; RFC-07 demo defers 1Password and CozoDB
 
 ### D-SCM-009 - 2026-06-27 - Demo First With RFC-07 Two-Hour Scope
-**Decision:** The first implementation is RFC-07 only: SQLite + Python ReBAC demo proving Agentic Identity delegation, recipe memory, context_path proofs, ALLOW/DENY/ESCALATE. Full RFC-06 MVP (Dolt, Qdrant, CozoDB, 1Password, MCP gateway, UI) is Phase 2 and must not block the demo.
+**Decision:** The first implementation is RFC-07 only: SQLite + Python ReBAC demo proving Agentic Identity delegation, recipe memory, context_path proofs, ALLOW/DENY/ESCALATE. Full RFC-06 MVP (Dolt, Memgraph, CozoDB, 1Password, MCP gateway, UI) is Phase 2 and must not block the demo.
 **Reason:** Prior plan overshot feasible demo time. RFC-07 delivers a correct, runnable Agentic Identity story in 2 hours.
 **Affected:** RFC-00, RFC-01, RFC-02, RFC-06, RFC-07, STATUS, README, demo/.
 **Status:** active

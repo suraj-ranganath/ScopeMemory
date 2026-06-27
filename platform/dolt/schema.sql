@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS grants (
   resource_id VARCHAR(128) NOT NULL,
   issuer VARCHAR(128) NOT NULL DEFAULT 'policy',
   proof_id VARCHAR(128),
+  reason TEXT,
   ttl_seconds INT NOT NULL DEFAULT 900,
   call_count_remaining INT NOT NULL DEFAULT 1,
   expires_at TIMESTAMP NULL,
@@ -100,7 +101,7 @@ CREATE TABLE IF NOT EXISTS policy_decisions (
   proof_json LONGTEXT NOT NULL,
   context_snapshot_id VARCHAR(128),
   dolt_commit_hash VARCHAR(128) NOT NULL DEFAULT 'demo-fixture',
-  qdrant_hits_json LONGTEXT,
+  recipe_hits_json LONGTEXT,
   credential_lease_id VARCHAR(128),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -193,9 +194,8 @@ CREATE TABLE IF NOT EXISTS session_recipe_similarity (
   score DOUBLE NOT NULL,
   rank_order INT NOT NULL DEFAULT 1,
   graph_node_id VARCHAR(128),
-  qdrant_point_id VARCHAR(128),
   dolt_commit_hash VARCHAR(128) NOT NULL DEFAULT 'demo-fixture',
-  qdrant_index_commit VARCHAR(128) NOT NULL DEFAULT 'demo-fixture',
+  recipe_index_commit VARCHAR(128) NOT NULL DEFAULT 'demo-fixture',
   reified TINYINT NOT NULL DEFAULT 1,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (session_id, recipe_id)
@@ -209,6 +209,6 @@ CREATE TABLE IF NOT EXISTS session_context_snapshots (
   fact_set_hash VARCHAR(128) NOT NULL,
   policy_decision_id VARCHAR(128),
   dolt_commit_hash VARCHAR(128) NOT NULL DEFAULT 'demo-fixture',
-  qdrant_index_commit VARCHAR(128) NOT NULL DEFAULT 'demo-fixture',
+  recipe_index_commit VARCHAR(128) NOT NULL DEFAULT 'demo-fixture',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

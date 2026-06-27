@@ -9,17 +9,17 @@ Reduce, reuse, crisp up the models to a clear buildable line, not speculative.
 ## Cuts Applied
 
 - Multi-provider secret-manager implementation is deferred. The plan keeps the provider interface but starts with real 1Password.
-- Full formal proof generation is deferred. The plan keeps deterministic proof traces tied to facts, rules, Dolt commits, Qdrant index commits, and event hashes.
+- Full formal proof generation is deferred. The plan keeps deterministic proof traces tied to facts, rules, Dolt commits, recipe index commits, and event hashes.
 - Slack interactive approval is deferred. The web approval page is the first human approval surface.
 - SPIFFE/SPIRE, enterprise IdP sync, real workload identity, and token exchange are production extensions, not MVP requirements.
-- Raw session indexing is rejected. Only accepted recipes can enter the normal Qdrant retrieval collection.
+- Raw session indexing is rejected. Only accepted recipes can enter the normal recipe retrieval layer.
 - Autonomous recipe acceptance is rejected. LLMs propose; humans merge.
 
 ## Reuse Decisions
 
 - Use MCP tool schemas as the call boundary.
 - Use Dolt for reviewable authorization memory.
-- Use Qdrant for derived retrieval only.
+- Use Memgraph/Dolt-derived graph retrieval only.
 - Use password-manager secret references instead of storing secrets.
 - Use pre-tool-use hooks as an adapter for hosts that expose them.
 

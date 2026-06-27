@@ -17,8 +17,8 @@ session completes
   -> human/security review accepts, edits, or rejects
   -> accepted recipe lands on Dolt main
   -> graph_nodes/graph_edges updated for recipe lineage
-  -> indexer derives Qdrant recipe chunks
-  -> future preflights can retrieve the accepted recipe and reify similar_to edges
+  -> indexer refreshes Memgraph recipe nodes and retrieval metadata
+  -> future preflights can retrieve the accepted recipe and reify matches_recipe edges
 ```
 
 ## Recipe Proposal Judge
@@ -90,9 +90,9 @@ in 20 minutes.
 
 Summaries are derived from proofs. They are not the proof.
 
-## Qdrant Indexing
+## Recipe Indexing
 
-Index accepted recipes only.
+Index accepted recipes only in the Dolt/Memgraph-derived graph. No separate vector store is required for the MVP.
 
 Chunk types:
 
@@ -103,10 +103,10 @@ Chunk types:
 - evidence summary.
 - denial/escalation examples.
 
-Point ID:
+Graph node ID:
 
 ```text
-recipe_id + chunk_kind + content_hash + embedding_version
+recipe_id + chunk_kind + content_hash + recipe_index_commit
 ```
 
 Payload:
@@ -124,8 +124,8 @@ Payload:
   "status": "accepted",
   "dolt_commit": "abc123",
   "content_hash": "sha256:...",
-  "embedding_model": "text-embedding-3-large",
-  "embedding_version": 1
+  "graph_node_id": "recipe_sales_renewal_prep_v3:goal:sha256...",
+  "recipe_index_commit": "abc123"
 }
 ```
 
@@ -133,9 +133,9 @@ Payload:
 
 Query:
 
-- dense vector over goal text.
-- sparse keyword matching over services, tools, scopes, and resource names.
-- payload filters for team, status, visibility, valid time, and tool availability.
+- goal-class and goal-text scoring over accepted recipe nodes.
+- graph traversal over services, tools, scopes, and resource names.
+- filters for team, status, visibility, valid time, and tool availability.
 
 Post-filter:
 
@@ -150,14 +150,13 @@ Post-filter:
 ```text
 Dolt commit lands on main
   -> indexer reads changed recipes
-  -> chunks canonical recipe text
+  -> refreshes canonical recipe summary rows
   -> computes content hashes
-  -> embeds changed chunks
-  -> upserts Qdrant
+  -> updates Memgraph recipe nodes and edges
   -> marks indexed_commit_hash
 ```
 
-If a recipe is deprecated, update payload status and exclude it from normal retrieval. If rejected or deleted, remove points.
+If a recipe is deprecated, update graph metadata status and exclude it from normal retrieval. If rejected or deleted, remove the derived graph nodes/edges.
 
 ## Audit Log
 
@@ -185,7 +184,7 @@ Events:
 ## Audit Invariants
 
 - Every policy decision points to a Dolt commit.
-- Every Qdrant hit points to a Dolt commit and content hash.
+- Every recipe hit points to a Dolt commit, recipe index commit, and content hash.
 - Every credential use points to a credential lease.
 - Every credential lease records `secret_exposed_to_agent=false`.
 - Every event hash links to the prior session event.

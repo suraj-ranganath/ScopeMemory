@@ -71,7 +71,7 @@ class CompiledPolicyFacts:
     context_path: list[str]
     context_snapshot_id: str = ""
     dolt_commit: str = "demo-fixture"
-    qdrant_index_commit: str = "demo-fixture"
+    recipe_index_commit: str = "demo-fixture"
     fact_set_hash: str = ""
 
 
@@ -246,7 +246,7 @@ hard_deny[s, tool, resource, hard_precedence, reason, rule] :=
   requested_resource[s, resource],
   similar_recipe[s, _recipe, _score, "accepted", false],
   hard_precedence = 103,
-  reason = "Qdrant recipe hit was not reified against Dolt commit",
+  reason = "recipe retrieval hit was not reified against Dolt commit",
   rule = "deny_unreified_recipe_hit"
 
 hard_deny[s, tool, resource, hard_precedence, reason, rule] :=
@@ -453,7 +453,7 @@ def compile_policy_facts(ctx: dict[str, Any]) -> CompiledPolicyFacts:
         context_path=context_path,
         context_snapshot_id=str(ctx.get("context_snapshot_id") or raw_facts.get("context_snapshot_id") or ""),
         dolt_commit=str(ctx.get("dolt_commit") or raw_facts.get("dolt_commit") or "demo-fixture"),
-        qdrant_index_commit=str(ctx.get("qdrant_index_commit") or raw_facts.get("qdrant_index_commit") or "demo-fixture"),
+        recipe_index_commit=str(ctx.get("recipe_index_commit") or raw_facts.get("recipe_index_commit") or "demo-fixture"),
         fact_set_hash=fact_set_hash,
     )
 
@@ -475,7 +475,7 @@ def decide(ctx: dict[str, Any]) -> PolicyDecision:
         facts=compiled.facts,
         rules=_proof_rules(evaluation.rule),
         dolt_commit=compiled.dolt_commit,
-        qdrant_index_commit=compiled.qdrant_index_commit,
+        recipe_index_commit=compiled.recipe_index_commit,
         candidate_decisions=evaluation.candidates,
         policy_engine=evaluation.policy_engine,
     )
@@ -490,7 +490,7 @@ def decide(ctx: dict[str, Any]) -> PolicyDecision:
         "facts": proof.facts,
         "context_path": proof.context_path,
         "dolt_commit": proof.dolt_commit,
-        "qdrant_index_commit": proof.qdrant_index_commit,
+        "recipe_index_commit": proof.recipe_index_commit,
         "candidate_decisions": proof.candidate_decisions,
         "fact_set_hash": compiled.fact_set_hash,
     }
@@ -630,7 +630,7 @@ def _evaluate_with_python(compiled: CompiledPolicyFacts, fallback_error: Excepti
     if "goal_expansion" in violations:
         hard_denies.append(("tool output attempted to expand the signed session goal", "deny_goal_expansion"))
     if any(row[4] is False for row in rows["similar_recipe"]):
-        hard_denies.append(("Qdrant recipe hit was not reified against Dolt commit", "deny_unreified_recipe_hit"))
+        hard_denies.append(("recipe retrieval hit was not reified against Dolt commit", "deny_unreified_recipe_hit"))
     if ("context_snapshot_present", True) in flags and not memory_consistent:
         hard_denies.append(("missing context path for graph-backed decision", "deny_missing_context_path"))
 

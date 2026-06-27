@@ -17,7 +17,7 @@ Agentic-IAM identity mirror (agents.identity_ref)
   → ALLOW | DENY | ESCALATE_HUMAN + proof JSON
 ```
 
-Implementation: `demo/` directory, SQLite, Python CLI. No MCP gateway, no Dolt, no Qdrant.
+Implementation: `demo/` directory, SQLite, Python CLI. No MCP gateway, no Dolt, no Memgraph.
 
 See [RFC-07](RFC-07-2-hour-agentic-identity-demo.md).
 
@@ -49,8 +49,8 @@ ScopeMemory MCP Gateway
   |
   +--> Context Graph Compiler
   |      - session context subgraph materialization
-  |      - graph traversal over Dolt nodes/edges
-  |      - Qdrant similar_to reification
+  |      - graph traversal over Dolt-derived Memgraph nodes/edges
+  |      - recipe hit reification
   |      - snapshot persistence
   |
   +--> Policy Engine
@@ -66,9 +66,9 @@ ScopeMemory MCP Gateway
   |      - grants and access requests
   |      - policy decisions and audit hashes
   |
-  +--> Qdrant
-  |      - derived recipe retrieval index
-  |      - semantic similar_to candidate edges
+  +--> Memgraph
+  |      - derived graph and recipe retrieval view
+  |      - session-to-recipe matches and ReBAC traversals
   |      - accepted recipes only for normal authorization recall
   |
   +--> Credential Broker
@@ -90,8 +90,8 @@ ScopeMemory MCP Gateway
 
 1. User or agent host calls `auth.preflight_goal`.
 2. Gateway creates a session with immutable goal text, user, team, agent, and available tool context.
-3. Gateway retrieves accepted recipe candidates from Qdrant.
-4. Gateway reifies semantic hits into `session_recipe_similarity` and builds the session context subgraph.
+3. Gateway retrieves accepted recipe candidates from the Dolt/Memgraph-derived graph.
+4. Gateway reifies recipe hits into session recipe metadata and builds the session context subgraph.
 5. Gateway filters candidates by team, status, valid time window, available tools, and resource visibility.
 6. Gateway expands subgraph traversals: recipe → tools → scopes → resources → credential bindings.
 7. Gateway persists `session_context_snapshots` for the preflight phase.
@@ -125,9 +125,9 @@ ScopeMemory MCP Gateway
 
 Dolt is canonical. It stores governed state, the Memory Data Context Graph node/edge layer, session context snapshots, and the audit trail. Any change that affects future authorization must be reviewable as a data diff.
 
-### Qdrant
+### Memgraph
 
-Qdrant is retrieval only. It stores non-secret recipe chunks with metadata payloads and produces candidate `similar_to` edges. Every Qdrant hit used in authorization must be reified in Dolt via `session_recipe_similarity` and tied back to a Dolt commit hash.
+Memgraph is a derived graph/retrieval layer only. It materializes non-secret recipe, session, tool, scope, resource, and grant relationships from Dolt so the gateway can retrieve accepted recipes and traverse context paths. Every recipe hit used in authorization must be tied back to Dolt state and a recipe index/sync commit.
 
 ### Policy Engine
 
@@ -160,7 +160,7 @@ LLMs perceive, classify, summarize, and propose. They can emit facts such as `go
 - Approval form with proof, context path, and redacted arguments.
 - Tool-call timeline.
 - Recipe review with Dolt diff.
-- Index status and Qdrant hit provenance.
+- Graph/index status and recipe hit provenance.
 
 ### Security UI
 
@@ -173,7 +173,7 @@ LLMs perceive, classify, summarize, and propose. They can emit facts such as `go
 ## Non-Goals
 
 - Do not build a generic RAG assistant.
-- Do not let Qdrant authorize.
+- Do not let the retrieval layer authorize.
 - Do not let LLM judges authorize.
 - Do not store decrypted credentials.
 - Do not use hooks as the only enforcement point.

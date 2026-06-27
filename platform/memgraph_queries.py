@@ -216,7 +216,7 @@ def session_recipe_hits(session_id: str) -> list[dict[str, Any]]:
     WITH r,
          max(coalesce(m.score, 0.89)) AS score,
          collect(DISTINCT coalesce(m.dolt_commit_hash, 'main')) AS dolt_commits,
-         collect(DISTINCT coalesce(m.qdrant_index_commit, 'main')) AS qdrant_commits
+         collect(DISTINCT coalesce(m.recipe_index_commit, 'main')) AS recipe_index_commits
     OPTIONAL MATCH (r)-[:PREDICTS_TOOL]->(tool:MCPTool)
     OPTIONAL MATCH (r)-[:PREDICTS_SCOPE]->(sc:Scope)
     RETURN r.id AS recipe_id,
@@ -224,7 +224,7 @@ def session_recipe_hits(session_id: str) -> list[dict[str, Any]]:
            r.goal_class AS goal_class,
            score,
            dolt_commits,
-           qdrant_commits,
+           recipe_index_commits,
            collect(DISTINCT tool.id) AS tools,
            collect(DISTINCT sc.id) AS scopes
     ORDER BY score DESC
@@ -240,7 +240,7 @@ def session_recipe_hits(session_id: str) -> list[dict[str, Any]]:
             "goal_class": rec["goal_class"],
             "score": round(float(rec["score"]), 3),
             "dolt_commit": (rec["dolt_commits"] or ["main"])[0],
-            "qdrant_index_commit": (rec["qdrant_commits"] or ["main"])[0],
+            "recipe_index_commit": (rec["recipe_index_commits"] or ["main"])[0],
             "predicted_tools": [t for t in rec["tools"] if t],
             "predicted_scopes": [s for s in rec["scopes"] if s],
         }

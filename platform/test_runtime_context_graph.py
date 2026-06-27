@@ -42,7 +42,8 @@ class RuntimeContextGraphTests(unittest.TestCase):
             "event_hash",
             "context_snapshot_id",
             "dolt_commit_hash",
-            "qdrant_hits_json",
+            "recipe_hits_json",
+            "recipe_index_commit",
             "call_count_remaining",
         ):
             self.assertIn(column, schema)
