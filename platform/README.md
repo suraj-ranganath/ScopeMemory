@@ -141,6 +141,18 @@ python3 run_mcp_demo.py
 
 See `mcp/README.md`.
 
+## Streamlit UI
+
+Interactive demo frontend for the full stack (Identity, Auth, Session, MCP):
+
+```bash
+docker compose --profile gateway-docker up -d --build
+./run_ui.sh
+# or: streamlit run streamlit_app.py
+```
+
+Opens at http://localhost:8501 — connects to gateway on :8080.
+
 See `person_b/README.md` for contracts, fixtures, and demo paths.
 
 ## Phase 2
