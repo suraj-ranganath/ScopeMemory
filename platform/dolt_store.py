@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -88,8 +89,30 @@ def _ensure_runtime_columns(cur) -> None:
         ("access_requests", "proof_id", "VARCHAR(128)"),
         ("access_requests", "approver_type", "VARCHAR(64) NOT NULL DEFAULT 'human'"),
         ("access_requests", "expires_at", "TIMESTAMP NULL"),
+        ("access_requests", "request_origin", "VARCHAR(64) NOT NULL DEFAULT 'tool_call_escalation'"),
+        ("access_requests", "prediction_id", "VARCHAR(128)"),
+        ("access_requests", "prediction_confidence", "DOUBLE"),
+        ("access_requests", "source_trace_ids_json", "LONGTEXT"),
+        ("access_requests", "trigger_phase", "VARCHAR(64) NOT NULL DEFAULT 'authorize'"),
+        ("access_requests", "created_before_tool_call", "TINYINT NOT NULL DEFAULT 0"),
+        ("access_requests", "sent_at", "TIMESTAMP NULL"),
+        ("access_requests", "first_tool_call_at", "TIMESTAMP NULL"),
         ("session_events", "prev_event_hash", "VARCHAR(128)"),
         ("session_events", "event_hash", "VARCHAR(128)"),
+        ("session_events", "event_order", "BIGINT"),
+        ("demo_linear_issues", "priority", "VARCHAR(64) NOT NULL DEFAULT 'medium'"),
+        ("demo_linear_issues", "source_session_id", "VARCHAR(128)"),
+        ("demo_linear_issues", "created_by_agent_id", "VARCHAR(128)"),
+        ("demo_linear_issues", "policy_decision_id", "VARCHAR(128)"),
+        ("demo_linear_issues", "credential_lease_id", "VARCHAR(128)"),
+        ("demo_linear_issues", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+        ("demo_linear_comments", "source_session_id", "VARCHAR(128)"),
+        ("demo_linear_comments", "created_by_agent_id", "VARCHAR(128)"),
+        ("demo_linear_comments", "policy_decision_id", "VARCHAR(128)"),
+        ("demo_slack_messages", "source_session_id", "VARCHAR(128)"),
+        ("demo_slack_messages", "policy_decision_id", "VARCHAR(128)"),
+        ("demo_slack_messages", "message_kind", "VARCHAR(64) NOT NULL DEFAULT 'message'"),
+        ("demo_slack_messages", "is_untrusted", "TINYINT NOT NULL DEFAULT 0"),
         ("session_recipe_similarity", "graph_node_id", "VARCHAR(128)"),
         ("session_recipe_similarity", "recipe_index_commit", "VARCHAR(128) NOT NULL DEFAULT 'demo-fixture'"),
         ("session_context_snapshots", "recipe_index_commit", "VARCHAR(128) NOT NULL DEFAULT 'demo-fixture'"),
@@ -107,13 +130,22 @@ def _latest_event_hash(cur, session_id: str) -> str:
         SELECT event_hash
         FROM session_events
         WHERE session_id = %s AND event_hash IS NOT NULL
-        ORDER BY created_at DESC, event_id DESC
+        ORDER BY COALESCE(event_order, 0) DESC, created_at DESC
         LIMIT 1
         """,
         (session_id,),
     )
     row = cur.fetchone()
     return row["event_hash"] if row and row.get("event_hash") else ""
+
+
+def _next_event_order(cur, session_id: str) -> int:
+    cur.execute(
+        "SELECT COALESCE(MAX(event_order), 0) + 1 AS next_order FROM session_events WHERE session_id = %s",
+        (session_id,),
+    )
+    row = cur.fetchone()
+    return int(row["next_order"] if row and row.get("next_order") is not None else 1)
 
 
 def _append_session_event(
@@ -127,6 +159,7 @@ def _append_session_event(
     event_id = event_id or f"evt_{uuid.uuid4().hex[:12]}"
     safe_body = _scrub_sensitive(body)
     previous = _latest_event_hash(cur, session_id)
+    event_order = _next_event_order(cur, session_id)
     event_hash = stable_hash(
         {
             "event_id": event_id,
@@ -134,15 +167,16 @@ def _append_session_event(
             "event_type": event_type,
             "body": safe_body,
             "previous_hash": previous,
+            "event_order": event_order,
         }
     )
     cur.execute(
         """
         INSERT INTO session_events
-        (event_id, session_id, event_type, event_json, prev_event_hash, event_hash)
-        VALUES (%s, %s, %s, %s, %s, %s)
+        (event_id, session_id, event_type, event_json, event_order, prev_event_hash, event_hash)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
         """,
-        (event_id, session_id, event_type, _json(safe_body), previous or None, event_hash),
+        (event_id, session_id, event_type, _json(safe_body), event_order, previous or None, event_hash),
     )
     return {
         "event_id": event_id,
@@ -263,7 +297,8 @@ def seed_demo() -> None:
     tables = [
         "session_context_snapshots", "session_recipe_similarity", "graph_edges", "graph_nodes",
         "recipe_index_meta", "slack_fixtures", "session_events", "recipe_proposals",
-        "access_requests", "policy_decisions", "grants", "recipe_scopes", "recipe_tools",
+        "demo_linear_comments", "demo_linear_issues", "demo_slack_messages",
+        "credential_leases", "credential_bindings", "access_requests", "policy_decisions", "grants", "recipe_scopes", "recipe_tools",
         "workflow_recipes", "delegations", "sessions", "resources",
         "tool_scopes", "agents", "user_teams", "teams", "users",
     ]
@@ -274,7 +309,16 @@ def seed_demo() -> None:
         ("user_alice", "Alice"),
         ("user_bob", "Bob"),
     ])
-    cur.executemany("INSERT INTO teams VALUES (%s, %s)", [("team_sales", "Sales")])
+    cur.executemany(
+        "INSERT INTO teams VALUES (%s, %s)",
+        [
+            ("team_sales", "Sales"),
+            ("team_support", "Support"),
+            ("team_finance", "Finance"),
+            ("team_engineering", "Engineering"),
+            ("team_success", "Customer Success"),
+        ],
+    )
     cur.executemany(
         "INSERT INTO user_teams VALUES (%s, %s, %s)",
         [
@@ -295,19 +339,31 @@ def seed_demo() -> None:
         (
             "sess_demo_001", "user_alice", "team_sales", "agent_renewal_01",
             "Prepare renewal follow-up for Acme. Check recent Slack context and create a Linear issue.",
-            "sales_renewal_prep", "waiting_for_human",
+            "sales_renewal_prep", "delegated",
         ),
     )
     cur.execute(
         "INSERT INTO delegations VALUES (%s, %s, %s, NOW())",
         ("sess_demo_001", "user_alice", "agent_renewal_01"),
     )
-    cur.execute(
-        "INSERT INTO workflow_recipes VALUES (%s, %s, %s, %s, %s)",
+    recipes = [
         ("recipe_sales_renewal_v3", "Sales Renewal Prep v3", "team_sales", "sales_renewal_prep", "accepted"),
-    )
-    for tool in ("linear.create_issue", "linear.search_issues", "linear.add_comment", "slack.search_messages"):
-        cur.execute("INSERT INTO recipe_tools VALUES (%s, %s, %s)", ("recipe_sales_renewal_v3", tool, 1))
+        ("recipe_support_escalation_v2", "Support Escalation Triage v2", "team_support", "support_escalation", "accepted"),
+        ("recipe_finance_vendor_review_v2", "Finance Vendor Review v2", "team_finance", "vendor_review", "accepted"),
+        ("recipe_eng_incident_followup_v1", "Engineering Incident Follow-up v1", "team_engineering", "incident_followup", "accepted"),
+        ("recipe_success_qbr_v1", "Customer Success QBR Prep v1", "team_success", "customer_qbr", "accepted"),
+    ]
+    cur.executemany("INSERT INTO workflow_recipes VALUES (%s, %s, %s, %s, %s)", recipes)
+    recipe_tools = {
+        "recipe_sales_renewal_v3": ("linear.create_issue", "linear.search_issues", "linear.add_comment", "slack.search_messages"),
+        "recipe_support_escalation_v2": ("linear.search_issues", "linear.add_comment", "slack.search_messages"),
+        "recipe_finance_vendor_review_v2": ("linear.create_issue", "linear.search_issues"),
+        "recipe_eng_incident_followup_v1": ("linear.create_issue", "linear.add_comment", "slack.search_messages"),
+        "recipe_success_qbr_v1": ("linear.search_issues", "slack.search_messages"),
+    }
+    for recipe_id, tools in recipe_tools.items():
+        for tool in tools:
+            cur.execute("INSERT INTO recipe_tools VALUES (%s, %s, %s)", (recipe_id, tool, 1))
     cur.executemany(
         "INSERT INTO recipe_scopes VALUES (%s, %s, %s)",
         [
@@ -315,6 +371,16 @@ def seed_demo() -> None:
             ("recipe_sales_renewal_v3", "linear:issues:read", "auto_approve"),
             ("recipe_sales_renewal_v3", "linear:comments:create", "auto_approve"),
             ("recipe_sales_renewal_v3", "slack:channels:history", "human_required"),
+            ("recipe_support_escalation_v2", "linear:issues:read", "auto_approve"),
+            ("recipe_support_escalation_v2", "linear:comments:create", "auto_approve"),
+            ("recipe_support_escalation_v2", "slack:channels:history", "human_required"),
+            ("recipe_finance_vendor_review_v2", "linear:issues:create", "human_required"),
+            ("recipe_finance_vendor_review_v2", "linear:issues:read", "auto_approve"),
+            ("recipe_eng_incident_followup_v1", "linear:issues:create", "auto_approve"),
+            ("recipe_eng_incident_followup_v1", "linear:comments:create", "auto_approve"),
+            ("recipe_eng_incident_followup_v1", "slack:channels:history", "human_required"),
+            ("recipe_success_qbr_v1", "linear:issues:read", "auto_approve"),
+            ("recipe_success_qbr_v1", "slack:channels:history", "human_required"),
         ],
     )
     cur.executemany(
@@ -323,6 +389,13 @@ def seed_demo() -> None:
             ("linear_team:SALES", "team_sales", "normal", 0),
             ("slack_channel:sales-acme", "team_sales", "restricted", 0),
             ("slack_channel:external-partners", "team_sales", "high", 1),
+            ("linear_team:SUPPORT", "team_support", "normal", 0),
+            ("slack_channel:support-escalations", "team_support", "restricted", 0),
+            ("linear_team:FINANCE", "team_finance", "high", 0),
+            ("linear_team:ENG", "team_engineering", "normal", 0),
+            ("slack_channel:incident-bridge", "team_engineering", "restricted", 0),
+            ("linear_team:SUCCESS", "team_success", "normal", 0),
+            ("slack_channel:success-qbr", "team_success", "restricted", 0),
         ],
     )
     cur.executemany(
@@ -348,20 +421,27 @@ def seed_demo() -> None:
         call_count_remaining=10,
     )
 
-    cur.execute(
+    linear_secret_ref = os.getenv("SCOPEMEMORY_LINEAR_1P_REF", "op://Employee/dummy_linear/password")
+    slack_secret_ref = os.getenv("SCOPEMEMORY_SLACK_1P_REF", "op://Employee/Dummy_Slack/password")
+    cur.executemany(
         """
-        INSERT INTO access_requests
-        (request_id, session_id, user_id, agent_id, requested_scope, requested_resource,
-         requested_tool_id, reason, recipe_id, proof_id, status)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO credential_bindings
+        (credential_ref_id, provider, credential_class, owner_team, tool_id, scope,
+         resource_id, injection_mode, secret_ref_handle)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
-        (
-            "req_slack_history_001", "sess_demo_001", "user_alice", "agent_renewal_01",
-            "slack:channels:history", "slack_channel:sales-acme",
-            "slack.search_messages",
-            "Sales renewal prep recipe predicts Slack read for customer context",
-            "recipe_sales_renewal_v3", "seed_pending_slack_history", "pending",
-        ),
+        [
+            (
+                "credref_linear_sales", "1password", "linear.oauth_token", "team_sales",
+                "linear.create_issue", "linear:issues:create", "linear_team:SALES",
+                "gateway_header", linear_secret_ref,
+            ),
+            (
+                "credref_slack_sales", "1password", "slack.bot_token", "team_sales",
+                "slack.search_messages", "slack:channels:history", "slack_channel:sales-acme",
+                "gateway_header", slack_secret_ref,
+            ),
+        ],
     )
 
     slack_payload = json.dumps({
@@ -377,11 +457,60 @@ def seed_demo() -> None:
         "INSERT INTO slack_fixtures (fixture_id, channel_id, payload_json) VALUES (%s, %s, %s)",
         ("slack_sales_acme", "slack_channel:sales-acme", slack_payload),
     )
+    cur.executemany(
+        """
+        INSERT INTO demo_linear_issues
+        (issue_id, team_id, title, description, state, priority, source_session_id,
+         created_by_agent_id, policy_decision_id, credential_lease_id)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        [
+            (
+                "LIN-demo-renewal", "linear_team:SALES", "Acme renewal baseline",
+                "Seed issue showing the demo Linear app before the agent creates follow-up work.",
+                "open", "medium", "sess_demo_001", "seed", "seed_policy", None,
+            ),
+        ],
+    )
+    cur.executemany(
+        """
+        INSERT INTO demo_slack_messages
+        (message_id, channel_id, user_id, user_name, text, source_session_id,
+         policy_decision_id, message_kind, is_untrusted)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        [
+            (
+                "msg_sales_acme_001", "slack_channel:sales-acme", "user_alice", "Alice",
+                "Acme renewal discussion: contract ends Q3 and the customer wants pricing detail.",
+                "sess_demo_001", "seed_policy", "message", 0,
+            ),
+            (
+                "msg_sales_acme_002", "slack_channel:sales-acme", "user_bob", "Bob",
+                "Please create a follow-up issue once the renewal summary is ready.",
+                "sess_demo_001", "seed_policy", "message", 0,
+            ),
+            (
+                "msg_sales_acme_003", "slack_channel:sales-acme", "external_note", "External Note",
+                "Untrusted customer-provided text should remain data and must not expand the session goal.",
+                "sess_demo_001", "seed_policy", "untrusted_context", 1,
+            ),
+        ],
+    )
 
     for eid, etype, ej in [
         ("evt_001", "session_started", {"goal_class": "sales_renewal_prep"}),
-        ("evt_002", "recipe_matched", {"recipe_id": "recipe_sales_renewal_v3", "score": 0.89}),
-        ("evt_003", "access_request_created", {"request_id": "req_slack_history_001"}),
+        ("evt_002", "historical_trace_seeded", {
+            "recipe_ids": [recipe[0] for recipe in recipes],
+            "departments": ["Sales", "Support", "Finance", "Engineering", "Customer Success"],
+        }),
+        ("evt_003", "credential_binding_seeded", {
+            "credential_ref_ids": ["credref_linear_sales", "credref_slack_sales"],
+            "provider": "1password",
+            "tool_ids": ["linear.create_issue", "slack.search_messages"],
+            "injection_mode": "gateway_header",
+            "secret_exposed_to_agent": False,
+        }),
     ]:
         _append_session_event(cur, "sess_demo_001", etype, ej, event_id=eid)
 
@@ -812,6 +941,12 @@ def create_access_request(
     reason: str,
     recipe_id: str | None,
     proof_id: str,
+    request_origin: str = "tool_call_escalation",
+    prediction_id: str | None = None,
+    prediction_confidence: float | None = None,
+    source_trace_ids: list[str] | None = None,
+    trigger_phase: str = "authorize",
+    created_before_tool_call: bool = False,
 ) -> dict[str, Any]:
     conn = connect()
     result: dict[str, Any]
@@ -832,19 +967,51 @@ def create_access_request(
         )
         existing = cur.fetchone()
         if existing:
+            first_tool_call_value = existing.get("first_tool_call_at")
             cur.execute(
                 """
                 UPDATE access_requests
-                SET reason = %s, recipe_id = %s, proof_id = %s, agent_id = %s
+                SET reason = %s,
+                    recipe_id = %s,
+                    proof_id = %s,
+                    agent_id = %s,
+                    request_origin = CASE
+                      WHEN request_origin = 'preflight_prediction' THEN request_origin
+                      ELSE %s
+                    END,
+                    prediction_id = COALESCE(prediction_id, %s),
+                    prediction_confidence = COALESCE(prediction_confidence, %s),
+                    source_trace_ids_json = COALESCE(source_trace_ids_json, %s),
+                    trigger_phase = %s,
+                    created_before_tool_call = GREATEST(created_before_tool_call, %s),
+                    first_tool_call_at = CASE
+                      WHEN %s = 'authorize' AND first_tool_call_at IS NULL THEN NOW()
+                      ELSE first_tool_call_at
+                    END
                 WHERE request_id = %s
                 """,
-                (reason, recipe_id, proof_id, agent_id, existing["request_id"]),
+                (
+                    reason,
+                    recipe_id,
+                    proof_id,
+                    agent_id,
+                    request_origin,
+                    prediction_id,
+                    prediction_confidence,
+                    _json(source_trace_ids or []),
+                    trigger_phase,
+                    int(created_before_tool_call),
+                    trigger_phase,
+                    existing["request_id"],
+                ),
             )
             existing.update({
                 "reason": reason,
                 "recipe_id": recipe_id,
                 "proof_id": proof_id,
                 "agent_id": agent_id,
+                "trigger_phase": trigger_phase,
+                "first_tool_call_at": first_tool_call_value,
                 "already_pending": True,
             })
             result = existing
@@ -854,8 +1021,12 @@ def create_access_request(
                 """
                 INSERT INTO access_requests
                 (request_id, session_id, user_id, agent_id, requested_scope,
-                 requested_resource, requested_tool_id, reason, recipe_id, proof_id, status)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending')
+                 requested_resource, requested_tool_id, reason, recipe_id, proof_id,
+                 request_origin, prediction_id, prediction_confidence,
+                 source_trace_ids_json, trigger_phase, created_before_tool_call,
+                 sent_at, first_tool_call_at, status)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        NOW(), CASE WHEN %s = 'authorize' THEN NOW() ELSE NULL END, 'pending')
                 """,
                 (
                     request_id,
@@ -868,12 +1039,19 @@ def create_access_request(
                     reason,
                     recipe_id,
                     proof_id,
+                    request_origin,
+                    prediction_id,
+                    prediction_confidence,
+                    _json(source_trace_ids or []),
+                    trigger_phase,
+                    int(created_before_tool_call),
+                    trigger_phase,
                 ),
             )
             _append_session_event(
                 cur,
                 session_id,
-                "access_request_created",
+                "access_request_sent" if trigger_phase == "preflight" else "access_request_created",
                 {
                     "request_id": request_id,
                     "tool_id": requested_tool_id,
@@ -881,6 +1059,11 @@ def create_access_request(
                     "resource_id": requested_resource,
                     "recipe_id": recipe_id,
                     "proof_id": proof_id,
+                    "request_origin": request_origin,
+                    "prediction_id": prediction_id,
+                    "prediction_confidence": prediction_confidence,
+                    "created_before_tool_call": created_before_tool_call,
+                    "trigger_phase": trigger_phase,
                 },
             )
             result = {
@@ -894,8 +1077,18 @@ def create_access_request(
                 "reason": reason,
                 "recipe_id": recipe_id,
                 "proof_id": proof_id,
+                "request_origin": request_origin,
+                "prediction_id": prediction_id,
+                "prediction_confidence": prediction_confidence,
+                "source_trace_ids": source_trace_ids or [],
+                "trigger_phase": trigger_phase,
+                "created_before_tool_call": created_before_tool_call,
                 "status": "pending",
             }
+        cur.execute(
+            "UPDATE sessions SET status = 'waiting_for_human' WHERE session_id = %s",
+            (session_id,),
+        )
     conn.close()
     return result
 
@@ -963,6 +1156,51 @@ def approve_access_request(request_id: str, approver_id: str) -> dict[str, Any]:
     except Exception:
         pass
     return result
+
+
+def mark_access_request_tool_call_seen(
+    session_id: str,
+    tool_id: str,
+    resource_id: str,
+) -> dict[str, Any] | None:
+    conn = connect()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT *
+            FROM access_requests
+            WHERE session_id = %s
+              AND requested_tool_id = %s
+              AND requested_resource = %s
+              AND first_tool_call_at IS NULL
+            ORDER BY created_at ASC, request_id ASC
+            LIMIT 1
+            """,
+            (session_id, tool_id, resource_id),
+        )
+        request = cur.fetchone()
+        if not request:
+            conn.close()
+            return None
+        cur.execute(
+            "UPDATE access_requests SET first_tool_call_at = NOW() WHERE request_id = %s",
+            (request["request_id"],),
+        )
+        _append_session_event(
+            cur,
+            session_id,
+            "anticipated_request_observed_tool_call",
+            {
+                "request_id": request["request_id"],
+                "tool_id": tool_id,
+                "resource_id": resource_id,
+                "request_origin": request.get("request_origin"),
+                "created_before_tool_call": bool(request.get("created_before_tool_call")),
+            },
+        )
+        request["first_tool_call_at"] = datetime.now(UTC)
+    conn.close()
+    return request
 
 
 def list_access_requests(session_id: str | None = None) -> list[dict[str, Any]]:
@@ -1062,6 +1300,279 @@ def find_active_grant_for_tool(session_id: str, tool_id: str, resource_id: str) 
         row = cur.fetchone()
     conn.close()
     return row
+
+
+def find_credential_binding(tool_id: str, scope: str, resource_id: str) -> dict[str, Any] | None:
+    conn = connect()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT credential_ref_id, provider, credential_class, owner_team,
+                   tool_id, scope, resource_id, injection_mode, secret_ref_handle
+            FROM credential_bindings
+            WHERE tool_id = %s AND scope = %s AND resource_id = %s
+            LIMIT 1
+            """,
+            (tool_id, scope, resource_id),
+        )
+        row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def save_credential_lease(lease: Any, *, uses_remaining: int | None = None) -> dict[str, Any]:
+    row = {
+        "lease_id": lease.lease_id,
+        "session_id": lease.session_id,
+        "tool_id": lease.tool_id,
+        "scope": lease.scope,
+        "resource_id": lease.resource_id,
+        "credential_ref_id": lease.credential_ref,
+        "credential_ref_hash": lease.credential_ref_hash,
+        "provider": lease.provider,
+        "provider_mode": lease.provider_mode,
+        "provider_operation_id": lease.provider_operation_id,
+        "injection_mode": lease.injection_mode,
+        "secret_exposed_to_agent": bool(lease.secret_exposed_to_agent),
+        "max_uses": int(lease.max_uses),
+        "uses_remaining": int(lease.max_uses if uses_remaining is None else uses_remaining),
+        "expires_at": lease.expires_at,
+        "status": "minted",
+    }
+    conn = connect()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO credential_leases
+            (lease_id, session_id, tool_id, scope, resource_id, credential_ref_id,
+             credential_ref_hash, provider, provider_mode, provider_operation_id,
+             injection_mode, secret_exposed_to_agent, max_uses, uses_remaining,
+             expires_at, status)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+              uses_remaining = VALUES(uses_remaining),
+              status = VALUES(status),
+              used_at = credential_leases.used_at
+            """,
+            (
+                row["lease_id"],
+                row["session_id"],
+                row["tool_id"],
+                row["scope"],
+                row["resource_id"],
+                row["credential_ref_id"],
+                row["credential_ref_hash"],
+                row["provider"],
+                row["provider_mode"],
+                row["provider_operation_id"],
+                row["injection_mode"],
+                int(row["secret_exposed_to_agent"]),
+                row["max_uses"],
+                row["uses_remaining"],
+                row["expires_at"].replace("T", " ").replace("Z", "") if isinstance(row["expires_at"], str) else row["expires_at"],
+                row["status"],
+            ),
+        )
+    conn.close()
+    return row
+
+
+def mark_credential_lease_used(lease_id: str, *, uses_remaining: int = 0) -> dict[str, Any] | None:
+    conn = connect()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE credential_leases
+            SET status = 'used', uses_remaining = %s, used_at = NOW()
+            WHERE lease_id = %s
+            """,
+            (uses_remaining, lease_id),
+        )
+        cur.execute(
+            """
+            SELECT lease_id, session_id, tool_id, scope, resource_id, credential_ref_id,
+                   credential_ref_hash, provider, provider_mode, provider_operation_id,
+                   injection_mode, secret_exposed_to_agent, max_uses, uses_remaining,
+                   expires_at, status, created_at, used_at
+            FROM credential_leases
+            WHERE lease_id = %s
+            """,
+            (lease_id,),
+        )
+        row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def attach_credential_lease_to_decision(decision_id: str, lease_id: str) -> None:
+    conn = connect()
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE policy_decisions SET credential_lease_id = %s WHERE decision_id = %s",
+            (lease_id, decision_id),
+        )
+    conn.close()
+
+
+def list_credential_leases(session_id: str | None = None) -> list[dict[str, Any]]:
+    conn = connect()
+    with conn.cursor() as cur:
+        query = """
+            SELECT lease_id, session_id, tool_id, scope, resource_id, credential_ref_id,
+                   credential_ref_hash, provider, provider_mode, provider_operation_id,
+                   injection_mode, secret_exposed_to_agent, max_uses, uses_remaining,
+                   expires_at, status, created_at, used_at
+            FROM credential_leases
+        """
+        if session_id:
+            cur.execute(query + " WHERE session_id = %s ORDER BY created_at, lease_id", (session_id,))
+        else:
+            cur.execute(query + " ORDER BY created_at, lease_id")
+        rows = list(cur.fetchall())
+    conn.close()
+    return rows
+
+
+def list_context_graph(session_id: str) -> dict[str, list[dict[str, Any]]]:
+    conn = connect()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT node_id, node_kind, source_id, label, payload_json, provenance
+            FROM graph_nodes
+            WHERE source_id = %s
+               OR provenance IN (
+                    SELECT snapshot_id FROM session_context_snapshots WHERE session_id = %s
+                  )
+               OR node_kind = 'Recipe'
+            ORDER BY node_kind, label
+            LIMIT 80
+            """,
+            (session_id, session_id),
+        )
+        nodes = [
+            {
+                **row,
+                "payload": json.loads(row["payload_json"]) if isinstance(row.get("payload_json"), str) else row.get("payload_json"),
+            }
+            for row in cur.fetchall()
+        ]
+        node_ids = [row["node_id"] for row in nodes]
+        if node_ids:
+            placeholders = ", ".join(["%s"] * len(node_ids))
+            cur.execute(
+                f"""
+                SELECT edge_id, src_node_id, dst_node_id, edge_kind,
+                       payload_json, confidence, provenance
+                FROM graph_edges
+                WHERE src_node_id IN ({placeholders}) OR dst_node_id IN ({placeholders})
+                ORDER BY edge_kind
+                LIMIT 120
+                """,
+                tuple(node_ids + node_ids),
+            )
+            edges = [
+                {
+                    **row,
+                    "payload": json.loads(row["payload_json"]) if isinstance(row.get("payload_json"), str) else row.get("payload_json"),
+                }
+                for row in cur.fetchall()
+            ]
+        else:
+            edges = []
+    conn.close()
+    return {"nodes": nodes, "edges": edges}
+
+
+def list_department_traces() -> list[dict[str, Any]]:
+    conn = connect()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT r.recipe_id, r.title, r.team_id, t.name AS team_name, r.goal_class,
+                   COUNT(DISTINCT rt.tool_id) AS tool_count,
+                   COUNT(DISTINCT rs.scope) AS scope_count,
+                   MAX(CASE WHEN rs.approval_mode = 'human_required' THEN 1 ELSE 0 END) AS has_human_gate
+            FROM workflow_recipes r
+            JOIN teams t ON t.team_id = r.team_id
+            LEFT JOIN recipe_tools rt ON rt.recipe_id = r.recipe_id
+            LEFT JOIN recipe_scopes rs ON rs.recipe_id = r.recipe_id
+            WHERE r.status = 'accepted'
+            GROUP BY r.recipe_id, r.title, r.team_id, t.name, r.goal_class
+            ORDER BY r.team_id = 'team_sales' DESC, r.title
+            """
+        )
+        rows = list(cur.fetchall())
+    conn.close()
+    return rows
+
+
+def list_demo_linear_state(team_id: str | None = None) -> dict[str, Any]:
+    conn = connect()
+    with conn.cursor() as cur:
+        if team_id:
+            cur.execute(
+                """
+                SELECT *
+                FROM demo_linear_issues
+                WHERE team_id = %s
+                ORDER BY created_at DESC, issue_id DESC
+                """,
+                (team_id,),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT *
+                FROM demo_linear_issues
+                ORDER BY created_at DESC, issue_id DESC
+                """
+            )
+        issues = list(cur.fetchall())
+        issue_ids = [issue["issue_id"] for issue in issues]
+        if issue_ids:
+            placeholders = ", ".join(["%s"] * len(issue_ids))
+            cur.execute(
+                f"""
+                SELECT *
+                FROM demo_linear_comments
+                WHERE issue_id IN ({placeholders})
+                ORDER BY created_at ASC, comment_id ASC
+                """,
+                tuple(issue_ids),
+            )
+            comments = list(cur.fetchall())
+        else:
+            comments = []
+    conn.close()
+    return {"issues": issues, "comments": comments}
+
+
+def list_demo_slack_state(channel_id: str | None = None) -> dict[str, Any]:
+    conn = connect()
+    with conn.cursor() as cur:
+        if channel_id:
+            cur.execute(
+                """
+                SELECT *
+                FROM demo_slack_messages
+                WHERE channel_id = %s
+                ORDER BY created_at ASC, message_id ASC
+                """,
+                (channel_id,),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT *
+                FROM demo_slack_messages
+                ORDER BY channel_id ASC, created_at ASC, message_id ASC
+                """
+            )
+        messages = list(cur.fetchall())
+    conn.close()
+    channels = sorted({message["channel_id"] for message in messages})
+    return {"channels": channels, "messages": messages}
 
 
 def fetch_all_for_sync() -> dict[str, list[dict[str, Any]]]:

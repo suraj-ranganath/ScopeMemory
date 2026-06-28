@@ -1,0 +1,9 @@
+[mcp_servers.scopememory]
+command = "python3"
+args = ["platform/codex_mcp_bridge.py"]
+
+[mcp_servers.scopememory.env]
+SCOPEMEMORY_GATEWAY_URL = "http://127.0.0.1:8080"
+SCOPEMEMORY_SESSION_ID = "sess_demo_001"
+SCOPEMEMORY_AGENT_ID = "agent_renewal_01"
+

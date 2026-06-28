@@ -1,13 +1,15 @@
 import { Effect } from "effect";
 import {
   AlertTriangle,
-  ArrowUpRight,
   Check,
   CircleDot,
+  ClipboardList,
   Fingerprint,
   GitBranch,
   KeyRound,
   LockKeyhole,
+  MessageSquare,
+  Play,
   Moon,
   RefreshCw,
   Route,
@@ -19,13 +21,25 @@ import { useEffect, useMemo, useState } from "react";
 import {
   AccessRequest,
   AppModel,
+  AuthorizationLedgerEntry,
+  ContextGraph,
+  CredentialLease,
+  DemoLinearComment,
+  DemoLinearIssue,
+  DemoSlackMessage,
+  DepartmentTrace,
   PolicyDecision,
   RecipeHit,
   TimelineEvent,
+  TraceEvent,
   approveRequest,
+  attemptSlackPost,
   loadAppModel,
   proposeRecipe,
-  searchSlack,
+  resetDemo,
+  resumeSlackRead,
+  runLinearIssue,
+  runPreflight,
   syncRecipes
 } from "./api";
 import "./styles.css";
@@ -36,7 +50,11 @@ type AsyncState = {
 };
 
 type ActionState = {
+  preflight: Record<string, unknown> | null;
+  linear: Record<string, unknown> | null;
   slack: Record<string, unknown> | null;
+  rejectedSlack: Record<string, unknown> | null;
+  reset: Record<string, unknown> | null;
   proposal: Record<string, unknown> | null;
   sync: Record<string, unknown> | null;
 };
@@ -58,7 +76,7 @@ function runEffect<A>(
 function statusTone(value?: string) {
   const text = (value || "").toLowerCase();
   if (text.includes("allow") || text.includes("approved") || text.includes("ready")) return "good";
-  if (text.includes("deny") || text.includes("blocked")) return "danger";
+  if (text.includes("deny") || text.includes("blocked") || text.includes("reject")) return "danger";
   if (text.includes("pending") || text.includes("wait") || text.includes("escalate")) return "warn";
   return "quiet";
 }
@@ -103,20 +121,44 @@ function useAppModel() {
 
 export default function App() {
   const { model, state, refresh } = useAppModel();
-  const [actions, setActions] = useState<ActionState>({ slack: null, proposal: null, sync: null });
+  const [actions, setActions] = useState<ActionState>({
+    preflight: null,
+    linear: null,
+    slack: null,
+    rejectedSlack: null,
+    reset: null,
+    proposal: null,
+    sync: null
+  });
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [theme, setTheme] = useState<Theme>(initialTheme);
+  const [liveMode, setLiveMode] = useState(true);
 
   const session = model?.state.session;
   const decisions = model?.state.policy_decisions || [];
   const accessRequests = model?.state.access_requests || [];
+  const anticipatedRequests = model?.state.anticipated_requests || accessRequests.filter((request) => request.created_before_tool_call);
+  const credentialLeases = model?.state.credential_leases || [];
+  const traceEvents = model?.state.trace_events || [];
+  const departmentTraces = model?.state.department_traces || [];
+  const contextGraph = model?.state.context_graph || { nodes: [], edges: [] };
+  const demoApps = model?.state.demo_apps || {};
+  const authorizationLedger = model?.state.authorization_ledger || [];
+  const agentRun = model?.state.agent_run;
   const visibleTools = model?.state.predicted_tools || [];
   const pendingCount = accessRequests.filter((request) => request.status === "pending").length;
   const mode = model?.state.mode || "offline";
+  const currentPath = window.location.pathname;
 
   useEffect(() => {
     window.localStorage.setItem("scopememory-theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    if (!liveMode) return;
+    const timer = window.setInterval(refresh, 2000);
+    return () => window.clearInterval(timer);
+  }, [liveMode, refresh]);
 
   const execute = <A,>(label: string, effect: Effect.Effect<A, unknown>, onSuccess: (value: A) => void) => {
     setBusyAction(label);
@@ -137,12 +179,54 @@ export default function App() {
     execute("approve", approveRequest(request.request_id), () => refresh());
   };
 
+  const executeAndRefresh = <A,>(label: keyof ActionState, effect: Effect.Effect<A, unknown>) => {
+    execute(label, effect, (value) => {
+      setActions((current) => ({ ...current, [label]: value as Record<string, unknown> }));
+      refresh();
+    });
+  };
+
   const latestDecision = decisions[decisions.length - 1];
   const proofRules = useMemo(() => {
     const proof = latestDecision?.proof;
     if (proof && Array.isArray(proof.rules)) return proof.rules as string[];
     return ["session", "recipe", "scope", "decision"];
   }, [latestDecision]);
+
+  if (currentPath.startsWith("/linear")) {
+    return (
+      <main className={`app-shell app-page-shell theme-${theme}`}>
+        <AppPageHeader
+          title="Demo Linear"
+          subtitle="Policy-gated MCP issue activity"
+          theme={theme}
+          setTheme={setTheme}
+        />
+        <LinearDemoPage
+          issues={demoApps.linear?.issues || []}
+          comments={demoApps.linear?.comments || []}
+          decisions={decisions}
+        />
+      </main>
+    );
+  }
+
+  if (currentPath.startsWith("/slack")) {
+    return (
+      <main className={`app-shell app-page-shell theme-${theme}`}>
+        <AppPageHeader
+          title="Demo Slack"
+          subtitle="Policy-gated MCP channel history"
+          theme={theme}
+          setTheme={setTheme}
+        />
+        <SlackDemoPage
+          messages={demoApps.slack?.messages || []}
+          decisions={decisions}
+        />
+      </main>
+    );
+  }
 
   return (
     <main className={`app-shell theme-${theme}`}>
@@ -180,6 +264,10 @@ export default function App() {
             <Pill>{session?.agent_id || "agent_renewal_01"}</Pill>
             <Pill tone={mode === "live" ? "good" : "warn"}>{mode}</Pill>
           </div>
+          <div className="app-link-row">
+            <a className="app-link" href="/linear"><ClipboardList size={15} /> Demo Linear</a>
+            <a className="app-link" href="/slack"><MessageSquare size={15} /> Demo Slack</a>
+          </div>
         </div>
 
         <ProofSpine
@@ -191,8 +279,36 @@ export default function App() {
       <section className="topology">
         <Metric label="Mode" value={mode} tone={mode === "live" ? "good" : "warn"} />
         <Metric label="Graph" value={model?.health?.graph_backend || "fixture"} />
+        <Metric label="Policy" value={model?.health?.policy_engine || "cozo"} tone={(model?.health?.policy_engine || "").includes("cozo") ? "good" : "danger"} />
         <Metric label="Visible tools" value={visibleTools.length.toString()} />
         <Metric label="Open requests" value={pendingCount.toString()} tone={pendingCount ? "warn" : "good"} />
+      </section>
+
+      <section className="presenter-controls" aria-label="Hackathon presenter controls">
+        <button className="secondary-button" disabled={busyAction === "reset"} onClick={() => executeAndRefresh("reset", resetDemo())}>
+          <RefreshCw size={15} /> Reset demo
+        </button>
+        <button className="primary-button" disabled={busyAction === "preflight"} onClick={() => executeAndRefresh("preflight", runPreflight(session?.session_id, session?.agent_id))}>
+          <Route size={15} /> Run preflight
+        </button>
+        <button className="secondary-button" disabled={!anticipatedRequests.some((request) => request.status === "pending") || busyAction === "approve"} onClick={() => {
+          const pending = anticipatedRequests.find((request) => request.status === "pending");
+          if (pending) approve(pending);
+        }}>
+          <Check size={15} /> Approve as Bob
+        </button>
+        <button className="secondary-button" disabled={busyAction === "linear"} onClick={() => executeAndRefresh("linear", runLinearIssue(session?.session_id, session?.agent_id))}>
+          <KeyRound size={15} /> Run Linear with 1P lease
+        </button>
+        <button className="secondary-button" disabled={busyAction === "slack"} onClick={() => executeAndRefresh("slack", resumeSlackRead(session?.session_id, session?.agent_id))}>
+          <Play size={15} /> Resume Slack read
+        </button>
+        <button className="secondary-button danger-action" disabled={busyAction === "rejectedSlack"} onClick={() => executeAndRefresh("rejectedSlack", attemptSlackPost(session?.session_id, session?.agent_id))}>
+          <X size={15} /> Attempt rejected Slack post
+        </button>
+        <button className={`live-toggle ${liveMode ? "good" : ""}`} onClick={() => setLiveMode((current) => !current)}>
+          <CircleDot size={13} /> {liveMode ? "Live polling" : "Polling paused"}
+        </button>
       </section>
 
       {state.error ? <div className="notice danger">{state.error}</div> : null}
@@ -217,6 +333,7 @@ export default function App() {
 
         <Panel title="Recipe memory" eyebrow="Predicted path" icon={<Sparkles size={18} />}>
           <RecipeList hits={model?.state.recipe_hits || []} />
+          <DepartmentTraceList traces={departmentTraces} />
           <div className="command-row">
             <button
               className="secondary-button"
@@ -229,13 +346,29 @@ export default function App() {
           {actions.sync ? <CodePlate value={actions.sync} /> : null}
         </Panel>
 
-        <Panel title="Access requests" eyebrow="Human gate" icon={<LockKeyhole size={18} />} id="requests">
-          <RequestList requests={accessRequests} onApprove={approve} busy={busyAction === "approve"} />
+        <Panel title="Anticipated access" eyebrow="Asked before tool call" icon={<LockKeyhole size={18} />} id="requests">
+          <AnticipatedRequestList requests={anticipatedRequests} onApprove={approve} busy={busyAction === "approve"} />
         </Panel>
 
         <Panel title="Credential lease" eyebrow="1Password broker" icon={<KeyRound size={18} />}>
-          <LeasePath grants={model?.state.grants || []} />
+          <CredentialLeasePanel leases={credentialLeases} grants={model?.state.grants || []} />
         </Panel>
+      </section>
+
+      <section className="decision-band access-ledger-band">
+        <div>
+          <p className="eyebrow">Access ledger</p>
+          <h2>Requests, approvals, rejections, and policy reasons in one place.</h2>
+        </div>
+        <AuthorizationLedger rows={authorizationLedger} />
+      </section>
+
+      <section className="live-trace-band">
+        <div>
+          <p className="eyebrow">Running trace</p>
+          <h2>Prediction, approval, policy, credential injection, and execution in one timeline.</h2>
+        </div>
+        <TraceLanes events={traceEvents} />
       </section>
 
       <section className="decision-band" id="proof">
@@ -247,19 +380,29 @@ export default function App() {
       </section>
 
       <section className="two-column" id="memory">
-        <Panel title="Timeline" eyebrow="Audit" icon={<GitBranch size={18} />}>
-          <Timeline events={model?.state.timeline || []} />
+        <Panel title="Context graph" eyebrow="Governed memory" icon={<GitBranch size={18} />}>
+          <ContextGraphPanel graph={contextGraph} />
         </Panel>
-        <Panel title="Adversarial context" eyebrow="Mock Slack" icon={<AlertTriangle size={18} />}>
-          <button
-            className="primary-button"
-            disabled={busyAction === "slack"}
-            onClick={() => execute("slack", searchSlack(), (slack) => setActions((current) => ({ ...current, slack: slack as Record<string, unknown> })))}
-          >
-            Inspect channel <ArrowUpRight size={15} />
-          </button>
-          {actions.slack ? <CodePlate value={actions.slack} /> : <EmptyLine text="No channel sample loaded." />}
+        <Panel title="Agent run" eyebrow="Long-horizon session" icon={<Play size={18} />}>
+          <AgentRunPanel run={agentRun} lastActions={actions} />
         </Panel>
+      </section>
+
+      <section className="two-column">
+        <Panel title="Demo Linear" eyebrow="Local MCP app" icon={<ClipboardList size={18} />}>
+          <LinearMini issues={demoApps.linear?.issues || []} />
+        </Panel>
+        <Panel title="Demo Slack" eyebrow="Local MCP app" icon={<MessageSquare size={18} />}>
+          <SlackMini messages={demoApps.slack?.messages || []} />
+        </Panel>
+      </section>
+
+      <section className="decision-band compact-audit">
+        <div>
+          <p className="eyebrow">Audit</p>
+          <h2>Hash-chained events remain available below the live trace.</h2>
+        </div>
+        <Timeline events={model?.state.timeline || []} />
       </section>
 
       <section className="learning-panel">
@@ -315,6 +458,31 @@ function Metric({ label, value, tone = "quiet" }: { label: string; value: string
   );
 }
 
+function AppPageHeader({ title, subtitle, theme, setTheme }: {
+  title: string;
+  subtitle: string;
+  theme: Theme;
+  setTheme: React.Dispatch<React.SetStateAction<Theme>>;
+}) {
+  return (
+    <header className="app-page-header">
+      <a className="app-link" href="/"><Route size={15} /> ScopeMemory</a>
+      <div>
+        <p className="eyebrow">Local demo app</p>
+        <h1>{title}</h1>
+        <p>{subtitle}</p>
+      </div>
+      <button
+        className="theme-toggle page-theme-toggle"
+        onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")}
+        aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+      >
+        {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
+      </button>
+    </header>
+  );
+}
+
 function ProofSpine({ rules, decision }: { rules: string[]; decision: string }) {
   const decisionName = decision.toLowerCase();
   const decisionLabel = decisionName.includes("escalate")
@@ -327,23 +495,22 @@ function ProofSpine({ rules, decision }: { rules: string[]; decision: string }) 
   const nodes = ["goal", "recipe", "grant", "lease", decisionLabel];
   return (
     <div className="proof-spine" aria-label="Proof path">
-      <svg viewBox="0 0 660 260" role="img" aria-labelledby="proof-title">
-        <title id="proof-title">Authorization proof path</title>
+      <svg viewBox="0 0 660 260" role="img" aria-label="Authorization proof path">
         <path className="spine-track" d="M52 134 C150 26 224 232 330 128 S522 36 606 134" />
         <path className="spine-glow" d="M52 134 C150 26 224 232 330 128 S522 36 606 134" />
         {nodes.map((node, index) => {
           const points = [
-            [52, 134],
-            [188, 108],
-            [330, 128],
-            [472, 104],
-            [606, 134]
+            { x: 52, y: 134, labelY: 186 },
+            { x: 188, y: 108, labelY: 186 },
+            { x: 330, y: 128, labelY: 186 },
+            { x: 472, y: 104, labelY: 186 },
+            { x: 606, y: 134, labelY: 186 }
           ];
-          const [x, y] = points[index];
+          const { x, y, labelY } = points[index];
           return (
             <g key={node} className="spine-node">
               <circle cx={x} cy={y} r="18" />
-              <text x={x} y={y + 43} textAnchor="middle">{node}</text>
+              <text x={x} y={labelY} textAnchor="middle">{node}</text>
             </g>
           );
         })}
@@ -355,12 +522,65 @@ function ProofSpine({ rules, decision }: { rules: string[]; decision: string }) 
   );
 }
 
+function AuthorizationLedger({ rows }: { rows: AuthorizationLedgerEntry[] }) {
+  if (!rows.length) return <EmptyLine text="Run preflight and tool calls to populate the ledger." />;
+  return (
+    <div className="authorization-ledger">
+      {rows.map((row, index) => (
+        <article className={`ledger-row ${statusTone(row.status || row.decision)}`} key={`${row.kind}-${row.request_id || row.decision_id || index}`}>
+          <div className="ledger-main">
+            <Pill tone={statusTone(row.status || row.decision)}>{row.status || row.decision}</Pill>
+            <strong>{row.tool_id || "authorization"}</strong>
+            <span>{row.scope || "scope"} {"->"} {row.resource_id || "resource"}</span>
+            <p>{row.reason || "No policy reason recorded."}</p>
+          </div>
+          <div className="ledger-proof">
+            {row.policy_engine ? <Pill tone={row.policy_engine.includes("cozo") ? "good" : "danger"}>{row.policy_engine}</Pill> : null}
+            {(row.rules || []).slice(0, 4).map((rule) => <span key={`${row.decision_id}-${rule}`}>{rule}</span>)}
+            {row.proof_hash ? <small>{row.proof_hash}</small> : null}
+          </div>
+        </article>
+      ))}
+    </div>
+  );
+}
+
 function TrustDial({ value }: { value: number }) {
   const pct = Math.max(0, Math.min(1, value)) * 100;
   return (
     <div className="trust-dial" style={{ "--trust": `${pct}%` } as React.CSSProperties}>
       <span>{money.format(value)}</span>
       <small>trust</small>
+    </div>
+  );
+}
+
+function LinearMini({ issues }: { issues: DemoLinearIssue[] }) {
+  if (!issues.length) return <EmptyLine text="No demo Linear issues yet." />;
+  return (
+    <div className="app-mini-list">
+      {issues.slice(0, 4).map((issue) => (
+        <a className="app-mini-row" href={`/linear/issues/${issue.issue_id}`} key={issue.issue_id}>
+          <strong>{issue.issue_id}</strong>
+          <span>{issue.title}</span>
+          <Pill tone={issue.state === "open" ? "good" : "quiet"}>{issue.state || "open"}</Pill>
+        </a>
+      ))}
+    </div>
+  );
+}
+
+function SlackMini({ messages }: { messages: DemoSlackMessage[] }) {
+  if (!messages.length) return <EmptyLine text="No demo Slack messages yet." />;
+  return (
+    <div className="app-mini-list">
+      {messages.slice(-4).map((message) => (
+        <a className="app-mini-row" href={`/slack/channels/${message.channel_id}`} key={message.message_id}>
+          <strong>{message.user_name}</strong>
+          <span>{message.text}</span>
+          <Pill tone={message.is_untrusted ? "warn" : "quiet"}>{message.message_kind || "message"}</Pill>
+        </a>
+      ))}
     </div>
   );
 }
@@ -388,6 +608,124 @@ function RecipeList({ hits }: { hits: RecipeHit[] }) {
         </article>
       ))}
     </div>
+  );
+}
+
+function DepartmentTraceList({ traces }: { traces: DepartmentTrace[] }) {
+  if (!traces.length) return null;
+  return (
+    <div className="department-traces">
+      <p className="micro-label">Reusable traces</p>
+      {traces.slice(0, 5).map((trace) => (
+        <div className="department-row" key={trace.recipe_id}>
+          <span>{trace.team_name}</span>
+          <strong>{trace.title}</strong>
+          <Pill tone={trace.has_human_gate ? "warn" : "quiet"}>
+            {trace.tool_count || 0} tools
+          </Pill>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function LinearDemoPage({ issues, comments, decisions }: {
+  issues: DemoLinearIssue[];
+  comments: DemoLinearComment[];
+  decisions: PolicyDecision[];
+}) {
+  const issueId = window.location.pathname.split("/").filter(Boolean)[2];
+  const selected = issues.find((issue) => issue.issue_id === issueId) || issues[0];
+  const selectedComments = comments.filter((comment) => comment.issue_id === selected?.issue_id);
+  return (
+    <section className="demo-app-layout linear-app">
+      <aside className="demo-app-sidebar">
+        <p className="eyebrow">Issues</p>
+        {issues.map((issue) => (
+          <a className={`demo-app-list-row ${selected?.issue_id === issue.issue_id ? "active" : ""}`} href={`/linear/issues/${issue.issue_id}`} key={issue.issue_id}>
+            <strong>{issue.issue_id}</strong>
+            <span>{issue.title}</span>
+          </a>
+        ))}
+      </aside>
+      <article className="demo-app-detail">
+        {selected ? (
+          <>
+            <div className="demo-app-title">
+              <div>
+                <p className="eyebrow">{selected.issue_id}</p>
+                <h2>{selected.title}</h2>
+              </div>
+              <Pill tone="good">{selected.state || "open"}</Pill>
+            </div>
+            <p>{selected.description}</p>
+            <div className="demo-app-evidence">
+              <Pill>{selected.team_id}</Pill>
+              <Pill>session: {selected.source_session_id || "seed"}</Pill>
+              {selected.policy_decision_id ? <Pill tone="good">policy: {selected.policy_decision_id}</Pill> : null}
+              {selected.credential_lease_id ? <Pill tone="good">lease: {selected.credential_lease_id}</Pill> : null}
+            </div>
+            <h3>Comments</h3>
+            {selectedComments.length ? selectedComments.map((comment) => (
+              <div className="demo-comment" key={comment.comment_id}>
+                <strong>{comment.created_by_agent_id || "agent"}</strong>
+                <p>{comment.body}</p>
+              </div>
+            )) : <EmptyLine text="No comments on this issue." />}
+          </>
+        ) : <EmptyLine text="No Linear issue selected." />}
+      </article>
+      <aside className="demo-app-policy">
+        <p className="eyebrow">Policy evidence</p>
+        <DecisionList decisions={decisions.filter((decision) => (decision.tool_id || "").startsWith("linear."))} />
+      </aside>
+    </section>
+  );
+}
+
+function SlackDemoPage({ messages, decisions }: {
+  messages: DemoSlackMessage[];
+  decisions: PolicyDecision[];
+}) {
+  const channelId = decodeURIComponent(window.location.pathname.split("/").filter(Boolean)[2] || "slack_channel:sales-acme");
+  const channelMessages = messages.filter((message) => message.channel_id === channelId);
+  return (
+    <section className="demo-app-layout slack-app">
+      <aside className="demo-app-sidebar">
+        <p className="eyebrow">Channels</p>
+        {Array.from(new Set(messages.map((message) => message.channel_id))).map((channel) => (
+          <a className={`demo-app-list-row ${channel === channelId ? "active" : ""}`} href={`/slack/channels/${channel}`} key={channel}>
+            <strong>{channel.replace("slack_channel:", "#")}</strong>
+            <span>{messages.filter((message) => message.channel_id === channel).length} messages</span>
+          </a>
+        ))}
+      </aside>
+      <article className="demo-app-detail">
+        <div className="demo-app-title">
+          <div>
+            <p className="eyebrow">Channel</p>
+            <h2>{channelId.replace("slack_channel:", "#")}</h2>
+          </div>
+          <Pill tone="warn">human-gated read</Pill>
+        </div>
+        <div className="slack-message-list">
+          {channelMessages.map((message) => (
+            <div className={`slack-message ${message.is_untrusted ? "untrusted" : ""}`} key={message.message_id}>
+              <strong>{message.user_name}</strong>
+              <p>{message.text}</p>
+              <div>
+                <Pill tone={message.is_untrusted ? "warn" : "quiet"}>{message.message_kind || "message"}</Pill>
+                {message.policy_decision_id ? <Pill tone="good">policy: {message.policy_decision_id}</Pill> : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      </article>
+      <aside className="demo-app-policy">
+        <p className="eyebrow">Policy evidence</p>
+        <DecisionList decisions={decisions.filter((decision) => (decision.tool_id || "").startsWith("slack."))} />
+      </aside>
+    </section>
   );
 }
 
@@ -419,6 +757,39 @@ function RequestList({ requests, onApprove, busy }: {
   );
 }
 
+function AnticipatedRequestList({ requests, onApprove, busy }: {
+  requests: AccessRequest[];
+  onApprove: (request: AccessRequest) => void;
+  busy: boolean;
+}) {
+  if (!requests.length) return <EmptyLine text="Run preflight to send predicted approval requests before tool calls." />;
+  return (
+    <div className="request-list">
+      {requests.map((request) => (
+        <article className="request-row anticipated" key={request.request_id}>
+          <div>
+            <strong>{request.requested_tool_id}</strong>
+            <span>{request.requested_scope} {"->"} {request.requested_resource}</span>
+            <small>{request.reason}</small>
+            <div className="evidence-line">
+              <Pill tone="good">origin: {request.request_origin || "prediction"}</Pill>
+              <Pill tone="warn">{request.created_before_tool_call ? "before tool call" : "at tool call"}</Pill>
+              {request.prediction_confidence ? <Pill>{Math.round(request.prediction_confidence * 100)}% confidence</Pill> : null}
+            </div>
+          </div>
+          {request.status === "pending" ? (
+            <button className="primary-button" disabled={busy} onClick={() => onApprove(request)}>
+              Approve <Check size={15} />
+            </button>
+          ) : (
+            <Pill tone={statusTone(request.status)}>{request.status}</Pill>
+          )}
+        </article>
+      ))}
+    </div>
+  );
+}
+
 function LeasePath({ grants }: { grants: Array<Record<string, unknown>> }) {
   return (
     <div className="lease-path">
@@ -433,12 +804,47 @@ function LeasePath({ grants }: { grants: Array<Record<string, unknown>> }) {
   );
 }
 
+function CredentialLeasePanel({ leases, grants }: { leases: CredentialLease[]; grants: Array<Record<string, unknown>> }) {
+  if (!leases.length) {
+    return (
+      <div className="lease-path">
+        {["policy", "lease", "resolve", "execute"].map((step, index) => (
+          <div className="lease-step" key={step}>
+            <span>{index + 1}</span>
+            <strong>{step}</strong>
+          </div>
+        ))}
+        <p>{grants.length ? `${grants.length} grant record${grants.length === 1 ? "" : "s"} ready. Run Linear to mint a 1Password lease.` : "No credential material is exposed to the agent."}</p>
+      </div>
+    );
+  }
+  return (
+    <div className="lease-inspector">
+      {leases.map((lease) => (
+        <article className="lease-record" key={lease.lease_id}>
+          <div className="lease-record-head">
+            <strong>{lease.lease_id}</strong>
+            <Pill tone={lease.status === "used" ? "good" : "warn"}>{lease.status || "minted"}</Pill>
+          </div>
+          <dl>
+            <dt>provider</dt><dd>{lease.provider || "1password"}</dd>
+            <dt>mode</dt><dd>{lease.provider_mode || "broker"}</dd>
+            <dt>injection</dt><dd>{lease.injection_mode || "gateway_header"}</dd>
+            <dt>secret exposed</dt><dd>{String(Boolean(lease.secret_exposed_to_agent))}</dd>
+            <dt>credential hash</dt><dd>{lease.credential_ref_hash || "sha256:..."}</dd>
+          </dl>
+        </article>
+      ))}
+    </div>
+  );
+}
+
 function DecisionList({ decisions }: { decisions: PolicyDecision[] }) {
   if (!decisions.length) return <EmptyLine text="No policy decisions yet." />;
   return (
     <div className="decision-list">
       {decisions.map((decision, index) => (
-        <article className={`decision-row ${statusTone(decision.decision)}`} key={`${decision.tool_id}-${index}`}>
+        <article className={`decision-row ${statusTone(decision.decision)}`} key={decision.decision_id || `${decision.tool_id}-${index}`}>
           <div className="decision-mark">{decisionIcon(decision.decision)}</div>
           <div>
             <strong>{decision.tool_id || "tool.call"}</strong>
@@ -448,6 +854,74 @@ function DecisionList({ decisions }: { decisions: PolicyDecision[] }) {
           <CodePlate value={decision.proof || decision.proof_json || {}} />
         </article>
       ))}
+    </div>
+  );
+}
+
+function TraceLanes({ events }: { events: TraceEvent[] }) {
+  const lanes = ["Context", "Approval", "Policy", "Credential", "Execution", "Learning"];
+  if (!events.length) return <EmptyLine text="Run preflight to start the live trace." />;
+  return (
+    <div className="trace-lanes">
+      {lanes.map((lane) => {
+        const laneEvents = events.filter((event) => event.lane === lane).slice(-4);
+        return (
+          <div className="trace-lane" key={lane}>
+            <h3>{lane}</h3>
+            {laneEvents.length ? laneEvents.map((event, index) => (
+              <article className="trace-event" key={`${event.event_type}-${index}`}>
+                <strong>{event.event_type}</strong>
+                <span>{event.created_at || "demo time"}</span>
+                <small>{event.event_hash ? event.event_hash.slice(0, 18) : ""}</small>
+              </article>
+            )) : <p>No events yet.</p>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ContextGraphPanel({ graph }: { graph: ContextGraph }) {
+  const nodes = graph.nodes || [];
+  const edges = graph.edges || [];
+  if (!nodes.length) return <EmptyLine text="Run preflight to project the context graph." />;
+  return (
+    <div className="context-graph-panel">
+      <div className="graph-stats">
+        <Metric label="Nodes" value={nodes.length.toString()} />
+        <Metric label="Edges" value={edges.length.toString()} />
+      </div>
+      <div className="graph-node-list">
+        {nodes.slice(0, 10).map((node) => (
+          <div className="graph-node-row" key={String(node.node_id)}>
+            <span>{String(node.node_kind || "Node")}</span>
+            <strong>{String(node.label || node.source_id || node.node_id)}</strong>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AgentRunPanel({ run, lastActions }: { run?: { status: string; current_step: string; pending_approvals: number; approved_requests: number; policy_decisions: number; credential_leases: number; last_event_hash?: string }; lastActions: ActionState }) {
+  if (!run) return <EmptyLine text="No agent run loaded." />;
+  return (
+    <div className="agent-run-panel">
+      <div className="agent-status">
+        <Pill tone={statusTone(run.status)}>{run.status}</Pill>
+        <strong>{run.current_step}</strong>
+      </div>
+      <div className="agent-run-metrics">
+        <Metric label="Pending" value={run.pending_approvals.toString()} tone={run.pending_approvals ? "warn" : "good"} />
+        <Metric label="Approved" value={run.approved_requests.toString()} />
+        <Metric label="Policy" value={run.policy_decisions.toString()} />
+        <Metric label="Leases" value={run.credential_leases.toString()} />
+      </div>
+      {run.last_event_hash ? <p className="hash-line">Last event {run.last_event_hash}</p> : null}
+      {lastActions.linear ? <CodePlate value={lastActions.linear} /> : null}
+      {lastActions.slack ? <CodePlate value={lastActions.slack} /> : null}
+      {lastActions.rejectedSlack ? <CodePlate value={lastActions.rejectedSlack} /> : null}
     </div>
   );
 }

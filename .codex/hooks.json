@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Shell|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "SCOPEMEMORY_GATEWAY_URL=http://127.0.0.1:8080 SCOPEMEMORY_SESSION_ID=sess_demo_001 python3 platform/codex_hook.py",
+            "statusMessage": "ScopeMemory checking tool intent"
+          }
+        ]
+      }
+    ]
+  }
+}

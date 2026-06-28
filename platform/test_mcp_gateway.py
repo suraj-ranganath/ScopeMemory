@@ -18,7 +18,7 @@ class McpGatewaySurfaceTests(unittest.TestCase):
         self.assertIn("auth.explain_denial", AUTH_TOOL_NAMES)
         self.assertIn("auth.submit_workflow_feedback", AUTH_TOOL_NAMES)
 
-    def test_downstream_catalog_includes_mock_linear_wrapper_surface(self) -> None:
+    def test_downstream_catalog_includes_demo_linear_wrapper_surface(self) -> None:
         self.assertIn("linear.create_issue", DOWNSTREAM_TOOL_NAMES)
         self.assertIn("linear.search_issues", DOWNSTREAM_TOOL_NAMES)
         self.assertIn("linear.add_comment", DOWNSTREAM_TOOL_NAMES)
@@ -50,7 +50,7 @@ class McpGatewaySurfaceTests(unittest.TestCase):
         self.assertEqual(explanation["primary_rule"], "deny_external_write")
         self.assertEqual(explanation["required_scope"], "slack:chat:write")
 
-    def test_redacts_obvious_secret_references_from_mock_output(self) -> None:
+    def test_redacts_obvious_secret_references_from_demo_output(self) -> None:
         self.assertEqual(redact_text("Authorization: Bearer abc"), "[redacted]")
         self.assertEqual(redact_text("op://Vault/Item/token"), "[redacted]")
 

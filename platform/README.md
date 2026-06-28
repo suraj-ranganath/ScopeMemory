@@ -59,7 +59,7 @@ Expected output: `STACK DEMO PASSED`
 | Dolt | `dolthub/dolt-sql-server` | 3306 |
 | Memgraph | derived graph (ReBAC + recipe retrieval) | 7687 |
 | Graph fallback | in-process when Memgraph down | — |
-| Policy | deterministic rules (`cozo_policy.py`) | in-process |
+| Policy | embedded Cozo Datalog (`cozo_policy.py`) | in-process |
 | Audit | `policy_decisions` in Dolt | 3306 |
 
 ## API
@@ -141,6 +141,25 @@ python3 run_mcp_demo.py
 
 See `mcp/README.md`.
 
+## Codex live demo
+
+ScopeMemory is installed into Codex as a local stdio MCP server. The MCP bridge
+is the enforcement path; the PreToolUse hook is an adapter that records
+pre-execution intent for the dashboard.
+
+```bash
+docker compose --profile gateway-docker up -d --build
+python3 install_codex_demo.py
+```
+
+Then open a new Codex window in this repo and use the `scopememory` MCP tools.
+The web dashboard at http://127.0.0.1:8080/ shows:
+
+- anticipated access requests created before the tool call,
+- approved/rejected policy decisions with Cozo proof rules,
+- opaque credential lease and gateway injection evidence,
+- durable demo app state at `/linear` and `/slack`.
+
 ## React UI
 
 Interactive React frontend for the full stack. The UI uses Effect-powered API workflows and talks to the gateway on :8080.
@@ -177,7 +196,6 @@ See `person_b/README.md` for contracts, fixtures, and demo paths.
 
 ## Phase 2
 
-- Swap policy evaluator to embedded CozoDB Datalog (optional; current demo uses `cozo_policy.py`)
 - Connect live Agentic-IAM API instead of mock
 - Enable Memgraph Lab UI for graph visualization
-- Real downstream MCP proxy + credential broker (RFC-04)
+- Live 1Password provider resolution inside the existing credential broker

@@ -1,8 +1,7 @@
-"""Policy-bound mock downstream execution for the hackathon runtime."""
+"""Policy-bound downstream execution for local hackathon demo apps."""
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import Callable
 from typing import Any
 
@@ -86,7 +85,7 @@ def execute_downstream_tool(
             raise RuntimeExecutionError(str(consumed.get("reason") or "grant could not be consumed"))
         audit_events.append(consumed)
 
-    payload = _execute(tool_id, args, resource_id, slack_searcher)
+    payload = _execute(tool_id, args, resource_id, authorization, slack_searcher)
     redacted_payload, redacted_fields = redact_payload(payload)
     if redacted_payload.get("untrusted_instructions_redacted"):
         redacted_fields.append("prompt_injection")
@@ -156,58 +155,66 @@ def _execute(
     tool_id: str,
     args: dict[str, Any],
     resource_id: str,
+    authorization: dict[str, Any],
     slack_searcher: SlackSearcher | None,
 ) -> dict[str, Any]:
+    session_id = str(args.get("session_id") or authorization.get("proof", {}).get("session_id") or "")
+    agent_id = str(args.get("agent_id") or authorization.get("proof", {}).get("agent_id") or "")
+    decision_id = str(authorization.get("decision_id") or "")
+    lease_id = _lease_id(authorization)
+
     if tool_id == "linear.create_issue":
-        return {
-            "issue_id": f"LIN-{uuid.uuid4().hex[:8]}",
-            "team": resource_id,
-            "title": args.get("title", ""),
-            "description": args.get("description", ""),
-            "status": "created",
-            "mode": "mock",
-        }
+        from demo_apps import create_linear_issue
+        return create_linear_issue(
+            session_id=session_id,
+            agent_id=agent_id,
+            team_id=resource_id,
+            title=str(args.get("title", "")),
+            description=str(args.get("description", "")),
+            policy_decision_id=decision_id,
+            credential_lease_id=lease_id,
+        )
     if tool_id == "linear.search_issues":
+        from demo_apps import search_linear_issues
         query = str(args.get("query", ""))
-        return {
-            "team": resource_id,
-            "query": query,
-            "issues": [
-                {
-                    "issue_id": "LIN-demo-renewal",
-                    "title": "Acme renewal follow-up",
-                    "state": "open",
-                }
-            ] if "acme" in query.lower() else [],
-            "status": "searched",
-            "mode": "mock",
-        }
+        return search_linear_issues(team_id=resource_id, query=query)
     if tool_id == "linear.add_comment":
-        return {
-            "comment_id": f"comment_{uuid.uuid4().hex[:10]}",
-            "issue_id": args.get("issue_id", ""),
-            "body": args.get("body", ""),
-            "status": "commented",
-            "mode": "mock",
-        }
+        from demo_apps import add_linear_comment
+        return add_linear_comment(
+            session_id=session_id,
+            agent_id=agent_id,
+            issue_id=str(args.get("issue_id", "")),
+            body=str(args.get("body", "")),
+            policy_decision_id=decision_id,
+        )
     if tool_id == "slack.search_messages":
-        searcher = slack_searcher or (lambda channel: {"channel": channel, "messages": [], "prompt_injection": None})
-        payload = searcher(resource_id)
+        if slack_searcher:
+            payload = slack_searcher(resource_id)
+            return {
+                "channel": resource_id,
+                "messages": payload.get("messages", []),
+                "prompt_injection_detected": bool(payload.get("prompt_injection")),
+                "untrusted_context_present": bool(payload.get("prompt_injection")),
+                "untrusted_instructions_redacted": bool(payload.get("prompt_injection")),
+                "status": "searched",
+                "mode": "fixture",
+            }
+        from demo_apps import search_slack_messages
+        payload = search_slack_messages(channel_id=resource_id)
         return {
-            "channel": resource_id,
-            "messages": payload.get("messages", []),
-            "prompt_injection_detected": bool(payload.get("prompt_injection")),
-            "untrusted_instructions_redacted": bool(payload.get("prompt_injection")),
-            "status": "searched",
-            "mode": "fixture",
+            **payload,
+            "untrusted_instructions_redacted": bool(payload.get("untrusted_context_present")),
         }
     if tool_id == "slack.post_message":
-        return {
-            "channel": resource_id,
-            "text": args.get("text", ""),
-            "status": "posted",
-            "mode": "mock",
-        }
+        from demo_apps import post_slack_message
+        return post_slack_message(
+            session_id=session_id,
+            channel_id=resource_id,
+            user_id=agent_id or "agent_renewal_01",
+            user_name="RenewalBot",
+            text=str(args.get("text", "")),
+            policy_decision_id=decision_id,
+        )
     raise RuntimeExecutionError(f"no executor for {tool_id}")
 
 
@@ -223,3 +230,13 @@ def _safe_audit_summary(event: dict[str, Any]) -> dict[str, Any]:
         "event_type": event.get("event_type", ""),
         "event_hash": event.get("event_hash", ""),
     }
+
+
+def _lease_id(authorization: dict[str, Any]) -> str:
+    credential_lease = authorization.get("credential_lease")
+    if not isinstance(credential_lease, dict):
+        return ""
+    lease = credential_lease.get("lease")
+    if isinstance(lease, dict):
+        return str(lease.get("lease_id") or "")
+    return ""

@@ -6,7 +6,15 @@ import json
 from pathlib import Path
 from typing import Any
 
-from dolt_store import connect, get_session
+from dolt_store import (
+    connect,
+    get_session,
+    list_context_graph,
+    list_credential_leases,
+    list_demo_linear_state,
+    list_demo_slack_state,
+    list_department_traces,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -62,7 +70,15 @@ def build_ui_state(session_id: str, use_fixtures: bool = False) -> dict[str, Any
             (session_id,),
         )
         decisions = cur.fetchall()
-        cur.execute("SELECT * FROM session_events WHERE session_id = %s ORDER BY created_at", (session_id,))
+        cur.execute(
+            """
+            SELECT *
+            FROM session_events
+            WHERE session_id = %s
+            ORDER BY COALESCE(event_order, 0), created_at, event_id
+            """,
+            (session_id,),
+        )
         events = cur.fetchall()
         cur.execute("SELECT * FROM recipe_proposals WHERE evidence_session_id = %s", (session_id,))
         proposals = cur.fetchall()
@@ -81,28 +97,173 @@ def build_ui_state(session_id: str, use_fixtures: bool = False) -> dict[str, Any
         predicted_scopes.extend(scopes)
         recipe_hits.append({"recipe_id": r["recipe_id"], "score": 0.89, "title": title})
 
+    normalized_requests = [_normalize_request(row) for row in requests]
+    normalized_events = [
+        {**e, "payload": json.loads(e["event_json"]) if isinstance(e.get("event_json"), str) else e.get("event_json")}
+        for e in events
+    ]
+    decisions = [
+        {
+            **d,
+            "proof": json.loads(d["proof_json"]) if isinstance(d.get("proof_json"), str) else d.get("proof_json"),
+        }
+        for d in decisions
+    ]
+    credential_leases = [_normalize_bool_fields(row) for row in list_credential_leases(session_id)]
+    context_graph = list_context_graph(session_id)
+    department_traces = list_department_traces()
+    demo_apps = {
+        "linear": list_demo_linear_state("linear_team:SALES"),
+        "slack": list_demo_slack_state("slack_channel:sales-acme"),
+    }
+
     return {
         "session": session,
         "recipe_hits": recipe_hits,
         "predicted_tools": list(dict.fromkeys(predicted_tools)),
         "predicted_scopes": list(dict.fromkeys(predicted_scopes)),
-        "access_requests": requests,
+        "access_requests": normalized_requests,
+        "anticipated_requests": [
+            req for req in normalized_requests
+            if req.get("request_origin") == "preflight_prediction" or req.get("created_before_tool_call")
+        ],
         "grants": grants,
-        "policy_decisions": [
-            {
-                **d,
-                "proof": json.loads(d["proof_json"]) if isinstance(d.get("proof_json"), str) else d.get("proof_json"),
-            }
-            for d in decisions
-        ],
-        "timeline": [
-            {**e, "payload": json.loads(e["event_json"]) if isinstance(e.get("event_json"), str) else e.get("event_json")}
-            for e in events
-        ],
+        "credential_leases": credential_leases,
+        "policy_decisions": decisions,
+        "timeline": normalized_events,
+        "trace_events": [_trace_event(event) for event in normalized_events],
+        "context_graph": context_graph,
+        "department_traces": department_traces,
+        "demo_apps": demo_apps,
+        "authorization_ledger": _authorization_ledger(normalized_requests, decisions),
+        "agent_run": _agent_run(session, normalized_events, normalized_requests, decisions, credential_leases),
         "recipe_proposals": [
             {**p, "proposal": json.loads(p["proposal_json"])} for p in proposals
         ],
         "index_status": {"indexed_recipes": len(index_meta), "recipes": index_meta},
         "ui_status": session.get("status", "preflighted"),
         "mode": "live",
+    }
+
+
+def _normalize_request(row: dict[str, Any]) -> dict[str, Any]:
+    out = dict(row)
+    source = out.get("source_trace_ids_json")
+    if isinstance(source, str) and source:
+        try:
+            out["source_trace_ids"] = json.loads(source)
+        except json.JSONDecodeError:
+            out["source_trace_ids"] = []
+    else:
+        out["source_trace_ids"] = []
+    out["created_before_tool_call"] = bool(out.get("created_before_tool_call"))
+    return out
+
+
+def _normalize_bool_fields(row: dict[str, Any]) -> dict[str, Any]:
+    out = dict(row)
+    if "secret_exposed_to_agent" in out:
+        out["secret_exposed_to_agent"] = bool(out["secret_exposed_to_agent"])
+    return out
+
+
+def _trace_event(event: dict[str, Any]) -> dict[str, Any]:
+    event_type = str(event.get("event_type") or "")
+    lane = "Audit"
+    if event_type.startswith(("preflight", "recipe", "scope", "historical")):
+        lane = "Context"
+    elif event_type.startswith(("access_request", "grant")):
+        lane = "Approval"
+    elif event_type.startswith(("authorization", "policy", "denial")):
+        lane = "Policy"
+    elif event_type.startswith(("credential", "hook")):
+        lane = "Credential"
+    elif event_type.startswith(("tool_call", "downstream", "output")):
+        lane = "Execution"
+    elif event_type.startswith(("workflow", "recipe_proposal")):
+        lane = "Learning"
+    return {
+        "lane": lane,
+        "event_type": event_type,
+        "created_at": event.get("created_at"),
+        "payload": event.get("payload") or {},
+        "event_hash": event.get("event_hash"),
+        "prev_event_hash": event.get("prev_event_hash"),
+    }
+
+
+def _authorization_ledger(
+    requests: list[dict[str, Any]],
+    decisions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for request in requests:
+        rows.append({
+            "kind": "access_request",
+            "status": request.get("status"),
+            "tool_id": request.get("requested_tool_id"),
+            "resource_id": request.get("requested_resource"),
+            "scope": request.get("requested_scope"),
+            "reason": request.get("reason"),
+            "request_id": request.get("request_id"),
+            "policy_engine": "",
+            "rules": [],
+            "created_at": request.get("created_at"),
+        })
+    for decision in decisions:
+        proof = decision.get("proof") or {}
+        decision_value = str(decision.get("decision") or "")
+        if decision_value == "DENY":
+            status = "rejected"
+        elif decision_value in {"ALLOW", "AUTO_APPROVE_EPHEMERAL_GRANT"}:
+            status = "approved"
+        elif decision_value == "ESCALATE_HUMAN":
+            status = "requested"
+        else:
+            status = decision_value.lower() or "recorded"
+        rows.append({
+            "kind": "policy_decision",
+            "status": status,
+            "decision": decision_value,
+            "tool_id": decision.get("tool_id"),
+            "resource_id": decision.get("resource_id"),
+            "scope": proof.get("required_scope"),
+            "reason": decision.get("reason") or proof.get("reason"),
+            "decision_id": decision.get("decision_id"),
+            "policy_engine": proof.get("policy_engine"),
+            "rules": proof.get("rules") or [],
+            "candidate_decisions": proof.get("candidate_decisions") or [],
+            "proof_hash": proof.get("proof_hash"),
+            "created_at": decision.get("created_at"),
+        })
+    return sorted(rows, key=lambda row: str(row.get("created_at") or ""))
+
+
+def _agent_run(
+    session: dict[str, Any],
+    events: list[dict[str, Any]],
+    requests: list[dict[str, Any]],
+    decisions: list[dict[str, Any]],
+    credential_leases: list[dict[str, Any]],
+) -> dict[str, Any]:
+    pending = [req for req in requests if req.get("status") == "pending"]
+    approved = [req for req in requests if req.get("status") == "approved"]
+    event_types = [str(event.get("event_type") or "") for event in events]
+    status = session.get("status", "delegated")
+    if pending:
+        status = "waiting_for_async_approval"
+    elif any(decision.get("decision") == "ALLOW" for decision in decisions) and approved:
+        status = "resumed_after_approval"
+    if credential_leases:
+        status = "credential_bound_execution"
+    if any(event == "downstream_call_executed" for event in event_types):
+        status = "executed"
+    return {
+        "status": status,
+        "current_step": event_types[-1] if event_types else "session_seeded",
+        "pending_approvals": len(pending),
+        "approved_requests": len(approved),
+        "policy_decisions": len(decisions),
+        "credential_leases": len(credential_leases),
+        "last_event_hash": events[-1].get("event_hash") if events else "",
     }

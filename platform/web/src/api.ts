@@ -5,6 +5,7 @@ export type Health = {
   stack: string;
   graph_backend: string;
   recipe_retrieval?: string;
+  policy_engine?: string;
   iam_mode: string;
   delegation_jwt_required: string;
   mcp_endpoint: string;
@@ -37,6 +38,14 @@ export type AccessRequest = {
   recipe_id?: string;
   status: string;
   approver_type?: string | null;
+  request_origin?: string;
+  prediction_id?: string;
+  prediction_confidence?: number;
+  source_trace_ids?: string[];
+  trigger_phase?: string;
+  created_before_tool_call?: boolean;
+  sent_at?: string;
+  first_tool_call_at?: string | null;
 };
 
 export type PolicyDecision = {
@@ -56,15 +65,139 @@ export type TimelineEvent = {
   event_json?: string | Record<string, unknown>;
 };
 
+export type CredentialLease = {
+  lease_id: string;
+  tool_id?: string;
+  scope?: string;
+  resource_id?: string;
+  credential_ref_id?: string;
+  credential_ref_hash?: string;
+  provider?: string;
+  provider_mode?: string;
+  provider_operation_id?: string;
+  injection_mode?: string;
+  secret_exposed_to_agent?: boolean;
+  max_uses?: number;
+  uses_remaining?: number;
+  status?: string;
+  expires_at?: string;
+};
+
+export type TraceEvent = {
+  lane: string;
+  event_type: string;
+  created_at?: string;
+  payload?: Record<string, unknown>;
+  event_hash?: string;
+  prev_event_hash?: string;
+};
+
+export type ContextGraph = {
+  nodes: Array<Record<string, unknown>>;
+  edges: Array<Record<string, unknown>>;
+};
+
+export type DepartmentTrace = {
+  recipe_id: string;
+  title: string;
+  team_id: string;
+  team_name: string;
+  goal_class: string;
+  tool_count?: number;
+  scope_count?: number;
+  has_human_gate?: number | boolean;
+};
+
+export type AgentRun = {
+  status: string;
+  current_step: string;
+  pending_approvals: number;
+  approved_requests: number;
+  policy_decisions: number;
+  credential_leases: number;
+  last_event_hash?: string;
+};
+
+export type DemoLinearIssue = {
+  issue_id: string;
+  team_id: string;
+  title: string;
+  description?: string;
+  state?: string;
+  priority?: string;
+  source_session_id?: string;
+  created_by_agent_id?: string;
+  policy_decision_id?: string;
+  credential_lease_id?: string;
+  created_at?: string;
+};
+
+export type DemoLinearComment = {
+  comment_id: string;
+  issue_id: string;
+  body: string;
+  created_by_agent_id?: string;
+  policy_decision_id?: string;
+  created_at?: string;
+};
+
+export type DemoSlackMessage = {
+  message_id: string;
+  channel_id: string;
+  user_id: string;
+  user_name: string;
+  text: string;
+  source_session_id?: string;
+  policy_decision_id?: string;
+  message_kind?: string;
+  is_untrusted?: boolean | number;
+  created_at?: string;
+};
+
+export type DemoApps = {
+  linear?: {
+    issues: DemoLinearIssue[];
+    comments: DemoLinearComment[];
+  };
+  slack?: {
+    channels: string[];
+    messages: DemoSlackMessage[];
+  };
+};
+
+export type AuthorizationLedgerEntry = {
+  kind: string;
+  status: string;
+  decision?: string;
+  tool_id?: string;
+  resource_id?: string;
+  scope?: string;
+  reason?: string;
+  request_id?: string;
+  decision_id?: string;
+  policy_engine?: string;
+  rules?: string[];
+  proof_hash?: string;
+  created_at?: string;
+};
+
 export type UiState = {
   session: Session;
   recipe_hits: RecipeHit[];
   predicted_tools: string[];
   predicted_scopes: string[];
   access_requests: AccessRequest[];
+  anticipated_requests?: AccessRequest[];
   grants?: Array<Record<string, unknown>>;
+  credential_leases?: CredentialLease[];
   policy_decisions?: PolicyDecision[];
   timeline?: TimelineEvent[];
+  trace_events?: TraceEvent[];
+  context_graph?: ContextGraph;
+  department_traces?: DepartmentTrace[];
+  demo_apps?: DemoApps;
+  authorization_ledger?: AuthorizationLedgerEntry[];
+  agent_run?: AgentRun;
   recipe_proposals?: Array<Record<string, unknown>>;
   index_status?: Record<string, unknown>;
   ui_status?: string;
@@ -96,6 +229,7 @@ type ApiError = {
 };
 
 const SESSION_ID = "sess_demo_001";
+const AGENT_ID = "agent_renewal_01";
 
 const fallbackState: UiState = {
   mode: "offline",
@@ -203,9 +337,12 @@ const fallbackIdentity: IdentityProof = {
 function requestJson<A>(path: string, init?: RequestInit): Effect.Effect<A, ApiError> {
   return Effect.tryPromise({
     try: async () => {
+      const initHeaders = init?.headers instanceof Headers
+        ? Object.fromEntries(init.headers.entries())
+        : (init?.headers as Record<string, string> | undefined) || {};
       const response = await fetch(path, {
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        ...init
+        ...init,
+        headers: { "Content-Type": "application/json", Accept: "application/json", ...initHeaders }
       });
       if (!response.ok) {
         throw new Error(await response.text());
@@ -237,6 +374,71 @@ export function approveRequest(requestId: string) {
     method: "POST",
     body: JSON.stringify({ approver_id: "user_bob" })
   });
+}
+
+export function resetDemo() {
+  return requestJson<Record<string, unknown>>("/demo/scenarios/hackathon/reseed", { method: "POST" });
+}
+
+export function mintDelegationToken(sessionId = SESSION_ID) {
+  return requestJson<{ delegation_token: string }>("/iam/delegation-token", {
+    method: "POST",
+    body: JSON.stringify({ session_id: sessionId })
+  });
+}
+
+export function runPreflight(sessionId = SESSION_ID, agentId = AGENT_ID) {
+  return Effect.gen(function* () {
+    const minted = yield* mintDelegationToken(sessionId);
+    return yield* requestJson<Record<string, unknown>>("/auth/preflight", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${minted.delegation_token}` },
+      body: JSON.stringify({ session_id: sessionId, agent_id: agentId })
+    });
+  });
+}
+
+export function runMcpTool(name: string, args: Record<string, unknown>, sessionId = SESSION_ID) {
+  return Effect.gen(function* () {
+    const minted = yield* mintDelegationToken(sessionId);
+    return yield* requestJson<Record<string, unknown>>("/mcp", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${minted.delegation_token}` },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: Date.now(),
+        method: "tools/call",
+        params: { name, arguments: args }
+      })
+    });
+  });
+}
+
+export function runLinearIssue(sessionId = SESSION_ID, agentId = AGENT_ID) {
+  return runMcpTool("linear.create_issue", {
+    session_id: sessionId,
+    agent_id: agentId,
+    resource_id: "linear_team:SALES",
+    title: "Acme renewal follow-up",
+    description: "Create the renewal follow-up from governed ScopeMemory context."
+  }, sessionId);
+}
+
+export function resumeSlackRead(sessionId = SESSION_ID, agentId = AGENT_ID) {
+  return runMcpTool("slack.search_messages", {
+    session_id: sessionId,
+    agent_id: agentId,
+    channel: "slack_channel:sales-acme"
+  }, sessionId);
+}
+
+export function attemptSlackPost(sessionId = SESSION_ID, agentId = AGENT_ID) {
+  return runMcpTool("slack.post_message", {
+    session_id: sessionId,
+    agent_id: agentId,
+    resource_id: "slack_channel:external-partners",
+    text: "Post the Acme renewal summary to external partners."
+  }, sessionId);
 }
 
 export function syncRecipes() {
