@@ -213,8 +213,8 @@ def choose_provider_mode(readiness: OnePasswordReadiness, injection_mode: str) -
         return _first_available(available, ("onepassword_mcp_environment", "op_run_process_env"))
     if injection_mode == "gateway_header":
         return _first_available(available, (
-            "onepassword_sdk_service_account",
             "op_cli_secret_reference",
+            "onepassword_sdk_service_account",
             "onepassword_sdk_desktop",
         ))
     if injection_mode in {"stdin_or_fd", "local_socket", "provider_native"}:
