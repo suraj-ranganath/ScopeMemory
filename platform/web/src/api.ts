@@ -5,6 +5,7 @@ export type Health = {
   stack: string;
   graph_backend: string;
   recipe_retrieval?: string;
+  policy_engine?: string;
   iam_mode: string;
   delegation_jwt_required: string;
   mcp_endpoint: string;
@@ -117,6 +118,69 @@ export type AgentRun = {
   last_event_hash?: string;
 };
 
+export type DemoLinearIssue = {
+  issue_id: string;
+  team_id: string;
+  title: string;
+  description?: string;
+  state?: string;
+  priority?: string;
+  source_session_id?: string;
+  created_by_agent_id?: string;
+  policy_decision_id?: string;
+  credential_lease_id?: string;
+  created_at?: string;
+};
+
+export type DemoLinearComment = {
+  comment_id: string;
+  issue_id: string;
+  body: string;
+  created_by_agent_id?: string;
+  policy_decision_id?: string;
+  created_at?: string;
+};
+
+export type DemoSlackMessage = {
+  message_id: string;
+  channel_id: string;
+  user_id: string;
+  user_name: string;
+  text: string;
+  source_session_id?: string;
+  policy_decision_id?: string;
+  message_kind?: string;
+  is_untrusted?: boolean | number;
+  created_at?: string;
+};
+
+export type DemoApps = {
+  linear?: {
+    issues: DemoLinearIssue[];
+    comments: DemoLinearComment[];
+  };
+  slack?: {
+    channels: string[];
+    messages: DemoSlackMessage[];
+  };
+};
+
+export type AuthorizationLedgerEntry = {
+  kind: string;
+  status: string;
+  decision?: string;
+  tool_id?: string;
+  resource_id?: string;
+  scope?: string;
+  reason?: string;
+  request_id?: string;
+  decision_id?: string;
+  policy_engine?: string;
+  rules?: string[];
+  proof_hash?: string;
+  created_at?: string;
+};
+
 export type UiState = {
   session: Session;
   recipe_hits: RecipeHit[];
@@ -131,6 +195,8 @@ export type UiState = {
   trace_events?: TraceEvent[];
   context_graph?: ContextGraph;
   department_traces?: DepartmentTrace[];
+  demo_apps?: DemoApps;
+  authorization_ledger?: AuthorizationLedgerEntry[];
   agent_run?: AgentRun;
   recipe_proposals?: Array<Record<string, unknown>>;
   index_status?: Record<string, unknown>;
@@ -363,6 +429,15 @@ export function resumeSlackRead(sessionId = SESSION_ID, agentId = AGENT_ID) {
     session_id: sessionId,
     agent_id: agentId,
     channel: "slack_channel:sales-acme"
+  }, sessionId);
+}
+
+export function attemptSlackPost(sessionId = SESSION_ID, agentId = AGENT_ID) {
+  return runMcpTool("slack.post_message", {
+    session_id: sessionId,
+    agent_id: agentId,
+    resource_id: "slack_channel:external-partners",
+    text: "Post the Acme renewal summary to external partners."
   }, sessionId);
 }
 

@@ -3,10 +3,12 @@ import {
   AlertTriangle,
   Check,
   CircleDot,
+  ClipboardList,
   Fingerprint,
   GitBranch,
   KeyRound,
   LockKeyhole,
+  MessageSquare,
   Play,
   Moon,
   RefreshCw,
@@ -19,14 +21,19 @@ import { useEffect, useMemo, useState } from "react";
 import {
   AccessRequest,
   AppModel,
+  AuthorizationLedgerEntry,
   ContextGraph,
   CredentialLease,
+  DemoLinearComment,
+  DemoLinearIssue,
+  DemoSlackMessage,
   DepartmentTrace,
   PolicyDecision,
   RecipeHit,
   TimelineEvent,
   TraceEvent,
   approveRequest,
+  attemptSlackPost,
   loadAppModel,
   proposeRecipe,
   resetDemo,
@@ -46,6 +53,7 @@ type ActionState = {
   preflight: Record<string, unknown> | null;
   linear: Record<string, unknown> | null;
   slack: Record<string, unknown> | null;
+  rejectedSlack: Record<string, unknown> | null;
   reset: Record<string, unknown> | null;
   proposal: Record<string, unknown> | null;
   sync: Record<string, unknown> | null;
@@ -68,7 +76,7 @@ function runEffect<A>(
 function statusTone(value?: string) {
   const text = (value || "").toLowerCase();
   if (text.includes("allow") || text.includes("approved") || text.includes("ready")) return "good";
-  if (text.includes("deny") || text.includes("blocked")) return "danger";
+  if (text.includes("deny") || text.includes("blocked") || text.includes("reject")) return "danger";
   if (text.includes("pending") || text.includes("wait") || text.includes("escalate")) return "warn";
   return "quiet";
 }
@@ -117,6 +125,7 @@ export default function App() {
     preflight: null,
     linear: null,
     slack: null,
+    rejectedSlack: null,
     reset: null,
     proposal: null,
     sync: null
@@ -133,10 +142,13 @@ export default function App() {
   const traceEvents = model?.state.trace_events || [];
   const departmentTraces = model?.state.department_traces || [];
   const contextGraph = model?.state.context_graph || { nodes: [], edges: [] };
+  const demoApps = model?.state.demo_apps || {};
+  const authorizationLedger = model?.state.authorization_ledger || [];
   const agentRun = model?.state.agent_run;
   const visibleTools = model?.state.predicted_tools || [];
   const pendingCount = accessRequests.filter((request) => request.status === "pending").length;
   const mode = model?.state.mode || "offline";
+  const currentPath = window.location.pathname;
 
   useEffect(() => {
     window.localStorage.setItem("scopememory-theme", theme);
@@ -181,6 +193,41 @@ export default function App() {
     return ["session", "recipe", "scope", "decision"];
   }, [latestDecision]);
 
+  if (currentPath.startsWith("/linear")) {
+    return (
+      <main className={`app-shell app-page-shell theme-${theme}`}>
+        <AppPageHeader
+          title="Demo Linear"
+          subtitle="Policy-gated MCP issue activity"
+          theme={theme}
+          setTheme={setTheme}
+        />
+        <LinearDemoPage
+          issues={demoApps.linear?.issues || []}
+          comments={demoApps.linear?.comments || []}
+          decisions={decisions}
+        />
+      </main>
+    );
+  }
+
+  if (currentPath.startsWith("/slack")) {
+    return (
+      <main className={`app-shell app-page-shell theme-${theme}`}>
+        <AppPageHeader
+          title="Demo Slack"
+          subtitle="Policy-gated MCP channel history"
+          theme={theme}
+          setTheme={setTheme}
+        />
+        <SlackDemoPage
+          messages={demoApps.slack?.messages || []}
+          decisions={decisions}
+        />
+      </main>
+    );
+  }
+
   return (
     <main className={`app-shell theme-${theme}`}>
       <aside className="rail" aria-label="ScopeMemory sections">
@@ -217,6 +264,10 @@ export default function App() {
             <Pill>{session?.agent_id || "agent_renewal_01"}</Pill>
             <Pill tone={mode === "live" ? "good" : "warn"}>{mode}</Pill>
           </div>
+          <div className="app-link-row">
+            <a className="app-link" href="/linear"><ClipboardList size={15} /> Demo Linear</a>
+            <a className="app-link" href="/slack"><MessageSquare size={15} /> Demo Slack</a>
+          </div>
         </div>
 
         <ProofSpine
@@ -228,6 +279,7 @@ export default function App() {
       <section className="topology">
         <Metric label="Mode" value={mode} tone={mode === "live" ? "good" : "warn"} />
         <Metric label="Graph" value={model?.health?.graph_backend || "fixture"} />
+        <Metric label="Policy" value={model?.health?.policy_engine || "cozo"} tone={(model?.health?.policy_engine || "").includes("cozo") ? "good" : "danger"} />
         <Metric label="Visible tools" value={visibleTools.length.toString()} />
         <Metric label="Open requests" value={pendingCount.toString()} tone={pendingCount ? "warn" : "good"} />
       </section>
@@ -250,6 +302,9 @@ export default function App() {
         </button>
         <button className="secondary-button" disabled={busyAction === "slack"} onClick={() => executeAndRefresh("slack", resumeSlackRead(session?.session_id, session?.agent_id))}>
           <Play size={15} /> Resume Slack read
+        </button>
+        <button className="secondary-button danger-action" disabled={busyAction === "rejectedSlack"} onClick={() => executeAndRefresh("rejectedSlack", attemptSlackPost(session?.session_id, session?.agent_id))}>
+          <X size={15} /> Attempt rejected Slack post
         </button>
         <button className={`live-toggle ${liveMode ? "good" : ""}`} onClick={() => setLiveMode((current) => !current)}>
           <CircleDot size={13} /> {liveMode ? "Live polling" : "Polling paused"}
@@ -300,6 +355,14 @@ export default function App() {
         </Panel>
       </section>
 
+      <section className="decision-band access-ledger-band">
+        <div>
+          <p className="eyebrow">Access ledger</p>
+          <h2>Requests, approvals, rejections, and policy reasons in one place.</h2>
+        </div>
+        <AuthorizationLedger rows={authorizationLedger} />
+      </section>
+
       <section className="live-trace-band">
         <div>
           <p className="eyebrow">Running trace</p>
@@ -322,6 +385,15 @@ export default function App() {
         </Panel>
         <Panel title="Agent run" eyebrow="Long-horizon session" icon={<Play size={18} />}>
           <AgentRunPanel run={agentRun} lastActions={actions} />
+        </Panel>
+      </section>
+
+      <section className="two-column">
+        <Panel title="Demo Linear" eyebrow="Local MCP app" icon={<ClipboardList size={18} />}>
+          <LinearMini issues={demoApps.linear?.issues || []} />
+        </Panel>
+        <Panel title="Demo Slack" eyebrow="Local MCP app" icon={<MessageSquare size={18} />}>
+          <SlackMini messages={demoApps.slack?.messages || []} />
         </Panel>
       </section>
 
@@ -386,6 +458,31 @@ function Metric({ label, value, tone = "quiet" }: { label: string; value: string
   );
 }
 
+function AppPageHeader({ title, subtitle, theme, setTheme }: {
+  title: string;
+  subtitle: string;
+  theme: Theme;
+  setTheme: React.Dispatch<React.SetStateAction<Theme>>;
+}) {
+  return (
+    <header className="app-page-header">
+      <a className="app-link" href="/"><Route size={15} /> ScopeMemory</a>
+      <div>
+        <p className="eyebrow">Local demo app</p>
+        <h1>{title}</h1>
+        <p>{subtitle}</p>
+      </div>
+      <button
+        className="theme-toggle page-theme-toggle"
+        onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")}
+        aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+      >
+        {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
+      </button>
+    </header>
+  );
+}
+
 function ProofSpine({ rules, decision }: { rules: string[]; decision: string }) {
   const decisionName = decision.toLowerCase();
   const decisionLabel = decisionName.includes("escalate")
@@ -426,12 +523,65 @@ function ProofSpine({ rules, decision }: { rules: string[]; decision: string }) 
   );
 }
 
+function AuthorizationLedger({ rows }: { rows: AuthorizationLedgerEntry[] }) {
+  if (!rows.length) return <EmptyLine text="Run preflight and tool calls to populate the ledger." />;
+  return (
+    <div className="authorization-ledger">
+      {rows.map((row, index) => (
+        <article className={`ledger-row ${statusTone(row.status || row.decision)}`} key={`${row.kind}-${row.request_id || row.decision_id || index}`}>
+          <div className="ledger-main">
+            <Pill tone={statusTone(row.status || row.decision)}>{row.status || row.decision}</Pill>
+            <strong>{row.tool_id || "authorization"}</strong>
+            <span>{row.scope || "scope"} {"->"} {row.resource_id || "resource"}</span>
+            <p>{row.reason || "No policy reason recorded."}</p>
+          </div>
+          <div className="ledger-proof">
+            {row.policy_engine ? <Pill tone={row.policy_engine.includes("cozo") ? "good" : "danger"}>{row.policy_engine}</Pill> : null}
+            {(row.rules || []).slice(0, 4).map((rule) => <span key={`${row.decision_id}-${rule}`}>{rule}</span>)}
+            {row.proof_hash ? <small>{row.proof_hash}</small> : null}
+          </div>
+        </article>
+      ))}
+    </div>
+  );
+}
+
 function TrustDial({ value }: { value: number }) {
   const pct = Math.max(0, Math.min(1, value)) * 100;
   return (
     <div className="trust-dial" style={{ "--trust": `${pct}%` } as React.CSSProperties}>
       <span>{money.format(value)}</span>
       <small>trust</small>
+    </div>
+  );
+}
+
+function LinearMini({ issues }: { issues: DemoLinearIssue[] }) {
+  if (!issues.length) return <EmptyLine text="No demo Linear issues yet." />;
+  return (
+    <div className="app-mini-list">
+      {issues.slice(0, 4).map((issue) => (
+        <a className="app-mini-row" href={`/linear/issues/${issue.issue_id}`} key={issue.issue_id}>
+          <strong>{issue.issue_id}</strong>
+          <span>{issue.title}</span>
+          <Pill tone={issue.state === "open" ? "good" : "quiet"}>{issue.state || "open"}</Pill>
+        </a>
+      ))}
+    </div>
+  );
+}
+
+function SlackMini({ messages }: { messages: DemoSlackMessage[] }) {
+  if (!messages.length) return <EmptyLine text="No demo Slack messages yet." />;
+  return (
+    <div className="app-mini-list">
+      {messages.slice(-4).map((message) => (
+        <a className="app-mini-row" href={`/slack/channels/${message.channel_id}`} key={message.message_id}>
+          <strong>{message.user_name}</strong>
+          <span>{message.text}</span>
+          <Pill tone={message.is_untrusted ? "warn" : "quiet"}>{message.message_kind || "message"}</Pill>
+        </a>
+      ))}
     </div>
   );
 }
@@ -477,6 +627,106 @@ function DepartmentTraceList({ traces }: { traces: DepartmentTrace[] }) {
         </div>
       ))}
     </div>
+  );
+}
+
+function LinearDemoPage({ issues, comments, decisions }: {
+  issues: DemoLinearIssue[];
+  comments: DemoLinearComment[];
+  decisions: PolicyDecision[];
+}) {
+  const issueId = window.location.pathname.split("/").filter(Boolean)[2];
+  const selected = issues.find((issue) => issue.issue_id === issueId) || issues[0];
+  const selectedComments = comments.filter((comment) => comment.issue_id === selected?.issue_id);
+  return (
+    <section className="demo-app-layout linear-app">
+      <aside className="demo-app-sidebar">
+        <p className="eyebrow">Issues</p>
+        {issues.map((issue) => (
+          <a className={`demo-app-list-row ${selected?.issue_id === issue.issue_id ? "active" : ""}`} href={`/linear/issues/${issue.issue_id}`} key={issue.issue_id}>
+            <strong>{issue.issue_id}</strong>
+            <span>{issue.title}</span>
+          </a>
+        ))}
+      </aside>
+      <article className="demo-app-detail">
+        {selected ? (
+          <>
+            <div className="demo-app-title">
+              <div>
+                <p className="eyebrow">{selected.issue_id}</p>
+                <h2>{selected.title}</h2>
+              </div>
+              <Pill tone="good">{selected.state || "open"}</Pill>
+            </div>
+            <p>{selected.description}</p>
+            <div className="demo-app-evidence">
+              <Pill>{selected.team_id}</Pill>
+              <Pill>session: {selected.source_session_id || "seed"}</Pill>
+              {selected.policy_decision_id ? <Pill tone="good">policy: {selected.policy_decision_id}</Pill> : null}
+              {selected.credential_lease_id ? <Pill tone="good">lease: {selected.credential_lease_id}</Pill> : null}
+            </div>
+            <h3>Comments</h3>
+            {selectedComments.length ? selectedComments.map((comment) => (
+              <div className="demo-comment" key={comment.comment_id}>
+                <strong>{comment.created_by_agent_id || "agent"}</strong>
+                <p>{comment.body}</p>
+              </div>
+            )) : <EmptyLine text="No comments on this issue." />}
+          </>
+        ) : <EmptyLine text="No Linear issue selected." />}
+      </article>
+      <aside className="demo-app-policy">
+        <p className="eyebrow">Policy evidence</p>
+        <DecisionList decisions={decisions.filter((decision) => (decision.tool_id || "").startsWith("linear."))} />
+      </aside>
+    </section>
+  );
+}
+
+function SlackDemoPage({ messages, decisions }: {
+  messages: DemoSlackMessage[];
+  decisions: PolicyDecision[];
+}) {
+  const channelId = decodeURIComponent(window.location.pathname.split("/").filter(Boolean)[2] || "slack_channel:sales-acme");
+  const channelMessages = messages.filter((message) => message.channel_id === channelId);
+  return (
+    <section className="demo-app-layout slack-app">
+      <aside className="demo-app-sidebar">
+        <p className="eyebrow">Channels</p>
+        {Array.from(new Set(messages.map((message) => message.channel_id))).map((channel) => (
+          <a className={`demo-app-list-row ${channel === channelId ? "active" : ""}`} href={`/slack/channels/${channel}`} key={channel}>
+            <strong>{channel.replace("slack_channel:", "#")}</strong>
+            <span>{messages.filter((message) => message.channel_id === channel).length} messages</span>
+          </a>
+        ))}
+      </aside>
+      <article className="demo-app-detail">
+        <div className="demo-app-title">
+          <div>
+            <p className="eyebrow">Channel</p>
+            <h2>{channelId.replace("slack_channel:", "#")}</h2>
+          </div>
+          <Pill tone="warn">human-gated read</Pill>
+        </div>
+        <div className="slack-message-list">
+          {channelMessages.map((message) => (
+            <div className={`slack-message ${message.is_untrusted ? "untrusted" : ""}`} key={message.message_id}>
+              <strong>{message.user_name}</strong>
+              <p>{message.text}</p>
+              <div>
+                <Pill tone={message.is_untrusted ? "warn" : "quiet"}>{message.message_kind || "message"}</Pill>
+                {message.policy_decision_id ? <Pill tone="good">policy: {message.policy_decision_id}</Pill> : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      </article>
+      <aside className="demo-app-policy">
+        <p className="eyebrow">Policy evidence</p>
+        <DecisionList decisions={decisions.filter((decision) => (decision.tool_id || "").startsWith("slack."))} />
+      </aside>
+    </section>
   );
 }
 
@@ -595,7 +845,7 @@ function DecisionList({ decisions }: { decisions: PolicyDecision[] }) {
   return (
     <div className="decision-list">
       {decisions.map((decision, index) => (
-        <article className={`decision-row ${statusTone(decision.decision)}`} key={`${decision.tool_id}-${index}`}>
+        <article className={`decision-row ${statusTone(decision.decision)}`} key={decision.decision_id || `${decision.tool_id}-${index}`}>
           <div className="decision-mark">{decisionIcon(decision.decision)}</div>
           <div>
             <strong>{decision.tool_id || "tool.call"}</strong>
@@ -672,6 +922,7 @@ function AgentRunPanel({ run, lastActions }: { run?: { status: string; current_s
       {run.last_event_hash ? <p className="hash-line">Last event {run.last_event_hash}</p> : null}
       {lastActions.linear ? <CodePlate value={lastActions.linear} /> : null}
       {lastActions.slack ? <CodePlate value={lastActions.slack} /> : null}
+      {lastActions.rejectedSlack ? <CodePlate value={lastActions.rejectedSlack} /> : null}
     </div>
   );
 }

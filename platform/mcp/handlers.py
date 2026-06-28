@@ -13,7 +13,6 @@ from gateway_service import list_policy_decisions, run_authorize, run_preflight
 from mcp.protocol import MCP_AUTH_REQUIRED, MCP_POLICY_DENIED, tool_result_text
 from mcp.registry import AUTH_TOOL_NAMES, DOWNSTREAM_TOOL_NAMES
 from mcp.safe_views import explain_denial, redact_decision_rows
-from person_b.slack_fixtures import search_slack
 from runtime_execution import (
     RuntimeExecutionError,
     execute_downstream_tool,
@@ -217,7 +216,6 @@ def handle_tool_call(
                 resource_id=resource_id,
                 authorization=execution_auth,
                 audit_writer=append_session_event,
-                slack_searcher=search_slack,
             )
         except RuntimeExecutionError as e:
             raise McpHandlerError(MCP_POLICY_DENIED, str(e), {"decision_id": auth["decision_id"]}) from e

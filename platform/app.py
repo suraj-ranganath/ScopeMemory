@@ -17,10 +17,13 @@ from agentic_iam import mock_router, router as iam_router, verify_agent_active
 from agentic_identity.auth import resolve_delegation_token
 from config import AGENTIC_IAM_MODE, DELEGATION_JWT_REQUIRED
 from dolt_store import (
+    append_session_event,
     approve_access_request,
     get_session,
     init_schema,
     list_access_requests,
+    list_demo_linear_state,
+    list_demo_slack_state,
     seed_demo,
 )
 from gateway_service import run_authorize, run_preflight
@@ -102,6 +105,7 @@ def health() -> dict[str, str]:
         "stack": "dolt+graph+policy+mcp",
         "graph_backend": backend_name(),
         "recipe_retrieval": backend_name(),
+        "policy_engine": "cozo-datalog-required",
         "iam_mode": AGENTIC_IAM_MODE,
         "delegation_jwt_required": str(DELEGATION_JWT_REQUIRED).lower(),
         "mcp_endpoint": "/mcp",
@@ -110,6 +114,22 @@ def health() -> dict[str, str]:
 
 @app.get("/")
 def demo_ui() -> FileResponse:
+    return _spa()
+
+
+@app.get("/linear")
+@app.get("/linear/{path:path}")
+def demo_linear_ui(path: str = "") -> FileResponse:
+    return _spa()
+
+
+@app.get("/slack")
+@app.get("/slack/{path:path}")
+def demo_slack_ui(path: str = "") -> FileResponse:
+    return _spa()
+
+
+def _spa() -> FileResponse:
     index_path = WEB_DIST_DIR / "index.html"
     if not index_path.exists():
         index_path = WEB_DIR / "index.html"
@@ -235,6 +255,42 @@ def demo_approve_request(request_id: str, body: ApproveRequest) -> dict[str, Any
 def demo_slack_search(channel: str = Query(..., alias="channel")) -> dict[str, Any]:
     from person_b.slack_fixtures import search_slack
     return search_slack(channel)
+
+
+@app.get("/demo/linear/state")
+def demo_linear_state(team_id: str | None = None) -> dict[str, Any]:
+    return list_demo_linear_state(team_id or "linear_team:SALES")
+
+
+@app.get("/demo/slack/state")
+def demo_slack_state(channel_id: str | None = None) -> dict[str, Any]:
+    return list_demo_slack_state(channel_id or "slack_channel:sales-acme")
+
+
+@app.post("/codex/hooks/pre-tool-use")
+def codex_pre_tool_use(payload: dict[str, Any]) -> dict[str, Any]:
+    from hook_adapter import codex_pre_tool_use_output, evaluate_hook_intent, normalize_pre_tool_use
+
+    intent = normalize_pre_tool_use("codex", payload)
+    decision = evaluate_hook_intent(intent)
+    session_id = intent.session_id or str(payload.get("session_id") or "sess_demo_001")
+    append_session_event(
+        session_id,
+        "hook_pre_tool_use_checked",
+        {
+            "agent_host": intent.agent_host.value,
+            "hook_event": intent.hook_event,
+            "tool_name": intent.tool_name,
+            "access_kind": intent.access_kind,
+            "resource_hints": intent.resource_hints,
+            "secret_access_pattern": intent.secret_access_pattern.value,
+            "permission_decision": decision.decision.value,
+            "safe_reason": decision.safe_reason,
+            "route": decision.route,
+            "secret_exposed_to_agent": False,
+        },
+    )
+    return codex_pre_tool_use_output(decision)
 
 
 @app.post("/index/recipes")

@@ -11,6 +11,8 @@ from dolt_store import (
     get_session,
     list_context_graph,
     list_credential_leases,
+    list_demo_linear_state,
+    list_demo_slack_state,
     list_department_traces,
 )
 
@@ -110,6 +112,10 @@ def build_ui_state(session_id: str, use_fixtures: bool = False) -> dict[str, Any
     credential_leases = [_normalize_bool_fields(row) for row in list_credential_leases(session_id)]
     context_graph = list_context_graph(session_id)
     department_traces = list_department_traces()
+    demo_apps = {
+        "linear": list_demo_linear_state("linear_team:SALES"),
+        "slack": list_demo_slack_state("slack_channel:sales-acme"),
+    }
 
     return {
         "session": session,
@@ -128,6 +134,8 @@ def build_ui_state(session_id: str, use_fixtures: bool = False) -> dict[str, Any
         "trace_events": [_trace_event(event) for event in normalized_events],
         "context_graph": context_graph,
         "department_traces": department_traces,
+        "demo_apps": demo_apps,
+        "authorization_ledger": _authorization_ledger(normalized_requests, decisions),
         "agent_run": _agent_run(session, normalized_events, normalized_requests, decisions, credential_leases),
         "recipe_proposals": [
             {**p, "proposal": json.loads(p["proposal_json"])} for p in proposals
@@ -182,6 +190,53 @@ def _trace_event(event: dict[str, Any]) -> dict[str, Any]:
         "event_hash": event.get("event_hash"),
         "prev_event_hash": event.get("prev_event_hash"),
     }
+
+
+def _authorization_ledger(
+    requests: list[dict[str, Any]],
+    decisions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for request in requests:
+        rows.append({
+            "kind": "access_request",
+            "status": request.get("status"),
+            "tool_id": request.get("requested_tool_id"),
+            "resource_id": request.get("requested_resource"),
+            "scope": request.get("requested_scope"),
+            "reason": request.get("reason"),
+            "request_id": request.get("request_id"),
+            "policy_engine": "",
+            "rules": [],
+            "created_at": request.get("created_at"),
+        })
+    for decision in decisions:
+        proof = decision.get("proof") or {}
+        decision_value = str(decision.get("decision") or "")
+        if decision_value == "DENY":
+            status = "rejected"
+        elif decision_value in {"ALLOW", "AUTO_APPROVE_EPHEMERAL_GRANT"}:
+            status = "approved"
+        elif decision_value == "ESCALATE_HUMAN":
+            status = "requested"
+        else:
+            status = decision_value.lower() or "recorded"
+        rows.append({
+            "kind": "policy_decision",
+            "status": status,
+            "decision": decision_value,
+            "tool_id": decision.get("tool_id"),
+            "resource_id": decision.get("resource_id"),
+            "scope": proof.get("required_scope"),
+            "reason": decision.get("reason") or proof.get("reason"),
+            "decision_id": decision.get("decision_id"),
+            "policy_engine": proof.get("policy_engine"),
+            "rules": proof.get("rules") or [],
+            "candidate_decisions": proof.get("candidate_decisions") or [],
+            "proof_hash": proof.get("proof_hash"),
+            "created_at": decision.get("created_at"),
+        })
+    return sorted(rows, key=lambda row: str(row.get("created_at") or ""))
 
 
 def _agent_run(

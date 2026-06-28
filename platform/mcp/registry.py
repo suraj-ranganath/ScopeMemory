@@ -87,7 +87,7 @@ AUTH_TOOLS: list[dict[str, Any]] = [
 DOWNSTREAM_TOOLS: list[dict[str, Any]] = [
     _tool(
         "linear.create_issue",
-        "Create a Linear issue (policy-gated; mock execution in demo).",
+        "Create a Linear issue (policy-gated; durable local demo app).",
         {
             **SESSION_ARGS,
             **RESOURCE_ARG,
@@ -98,7 +98,7 @@ DOWNSTREAM_TOOLS: list[dict[str, Any]] = [
     ),
     _tool(
         "linear.search_issues",
-        "Search Linear issues (policy-gated; mock execution in demo).",
+        "Search Linear issues (policy-gated; durable local demo app).",
         {
             **SESSION_ARGS,
             **RESOURCE_ARG,
@@ -108,7 +108,7 @@ DOWNSTREAM_TOOLS: list[dict[str, Any]] = [
     ),
     _tool(
         "linear.add_comment",
-        "Add a Linear issue comment (policy-gated; mock execution in demo).",
+        "Add a Linear issue comment (policy-gated; durable local demo app).",
         {
             **SESSION_ARGS,
             **RESOURCE_ARG,
@@ -119,7 +119,7 @@ DOWNSTREAM_TOOLS: list[dict[str, Any]] = [
     ),
     _tool(
         "slack.search_messages",
-        "Search Slack channel history (policy-gated; fixture data in demo).",
+        "Search Slack channel history (policy-gated; durable local demo app).",
         {
             **SESSION_ARGS,
             "channel": {
@@ -131,7 +131,7 @@ DOWNSTREAM_TOOLS: list[dict[str, Any]] = [
     ),
     _tool(
         "slack.post_message",
-        "Post a Slack message (policy-gated; mock execution in demo).",
+        "Post a Slack message (policy-gated; durable local demo app).",
         {
             **SESSION_ARGS,
             **RESOURCE_ARG,

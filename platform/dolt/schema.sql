@@ -172,6 +172,44 @@ CREATE TABLE IF NOT EXISTS credential_leases (
   used_at TIMESTAMP NULL
 );
 
+CREATE TABLE IF NOT EXISTS demo_linear_issues (
+  issue_id VARCHAR(128) PRIMARY KEY,
+  team_id VARCHAR(128) NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT,
+  state VARCHAR(64) NOT NULL DEFAULT 'open',
+  priority VARCHAR(64) NOT NULL DEFAULT 'medium',
+  source_session_id VARCHAR(128),
+  created_by_agent_id VARCHAR(128),
+  policy_decision_id VARCHAR(128),
+  credential_lease_id VARCHAR(128),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS demo_linear_comments (
+  comment_id VARCHAR(128) PRIMARY KEY,
+  issue_id VARCHAR(128) NOT NULL,
+  body TEXT NOT NULL,
+  source_session_id VARCHAR(128),
+  created_by_agent_id VARCHAR(128),
+  policy_decision_id VARCHAR(128),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS demo_slack_messages (
+  message_id VARCHAR(128) PRIMARY KEY,
+  channel_id VARCHAR(128) NOT NULL,
+  user_id VARCHAR(128) NOT NULL,
+  user_name VARCHAR(128) NOT NULL,
+  text TEXT NOT NULL,
+  source_session_id VARCHAR(128),
+  policy_decision_id VARCHAR(128),
+  message_kind VARCHAR(64) NOT NULL DEFAULT 'message',
+  is_untrusted TINYINT NOT NULL DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS recipe_proposals (
   proposal_id VARCHAR(128) PRIMARY KEY,
   base_recipe_id VARCHAR(128) NOT NULL,

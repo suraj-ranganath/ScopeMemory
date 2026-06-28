@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -99,6 +100,19 @@ def _ensure_runtime_columns(cur) -> None:
         ("session_events", "prev_event_hash", "VARCHAR(128)"),
         ("session_events", "event_hash", "VARCHAR(128)"),
         ("session_events", "event_order", "BIGINT"),
+        ("demo_linear_issues", "priority", "VARCHAR(64) NOT NULL DEFAULT 'medium'"),
+        ("demo_linear_issues", "source_session_id", "VARCHAR(128)"),
+        ("demo_linear_issues", "created_by_agent_id", "VARCHAR(128)"),
+        ("demo_linear_issues", "policy_decision_id", "VARCHAR(128)"),
+        ("demo_linear_issues", "credential_lease_id", "VARCHAR(128)"),
+        ("demo_linear_issues", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+        ("demo_linear_comments", "source_session_id", "VARCHAR(128)"),
+        ("demo_linear_comments", "created_by_agent_id", "VARCHAR(128)"),
+        ("demo_linear_comments", "policy_decision_id", "VARCHAR(128)"),
+        ("demo_slack_messages", "source_session_id", "VARCHAR(128)"),
+        ("demo_slack_messages", "policy_decision_id", "VARCHAR(128)"),
+        ("demo_slack_messages", "message_kind", "VARCHAR(64) NOT NULL DEFAULT 'message'"),
+        ("demo_slack_messages", "is_untrusted", "TINYINT NOT NULL DEFAULT 0"),
         ("session_recipe_similarity", "graph_node_id", "VARCHAR(128)"),
         ("session_recipe_similarity", "recipe_index_commit", "VARCHAR(128) NOT NULL DEFAULT 'demo-fixture'"),
         ("session_context_snapshots", "recipe_index_commit", "VARCHAR(128) NOT NULL DEFAULT 'demo-fixture'"),
@@ -283,6 +297,7 @@ def seed_demo() -> None:
     tables = [
         "session_context_snapshots", "session_recipe_similarity", "graph_edges", "graph_nodes",
         "recipe_index_meta", "slack_fixtures", "session_events", "recipe_proposals",
+        "demo_linear_comments", "demo_linear_issues", "demo_slack_messages",
         "credential_leases", "credential_bindings", "access_requests", "policy_decisions", "grants", "recipe_scopes", "recipe_tools",
         "workflow_recipes", "delegations", "sessions", "resources",
         "tool_scopes", "agents", "user_teams", "teams", "users",
@@ -406,18 +421,27 @@ def seed_demo() -> None:
         call_count_remaining=10,
     )
 
-    cur.execute(
+    linear_secret_ref = os.getenv("SCOPEMEMORY_LINEAR_1P_REF", "op://Employee/dummy_linear/password")
+    slack_secret_ref = os.getenv("SCOPEMEMORY_SLACK_1P_REF", "op://Employee/Dummy_Slack/password")
+    cur.executemany(
         """
         INSERT INTO credential_bindings
         (credential_ref_id, provider, credential_class, owner_team, tool_id, scope,
          resource_id, injection_mode, secret_ref_handle)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
-        (
-            "credref_linear_sales", "1password", "linear.oauth_token", "team_sales",
-            "linear.create_issue", "linear:issues:create", "linear_team:SALES",
-            "gateway_header", "broker-handle://onepassword/scope-memory-demo/linear-sales-token",
-        ),
+        [
+            (
+                "credref_linear_sales", "1password", "linear.oauth_token", "team_sales",
+                "linear.create_issue", "linear:issues:create", "linear_team:SALES",
+                "gateway_header", linear_secret_ref,
+            ),
+            (
+                "credref_slack_sales", "1password", "slack.bot_token", "team_sales",
+                "slack.search_messages", "slack:channels:history", "slack_channel:sales-acme",
+                "gateway_header", slack_secret_ref,
+            ),
+        ],
     )
 
     slack_payload = json.dumps({
@@ -433,6 +457,46 @@ def seed_demo() -> None:
         "INSERT INTO slack_fixtures (fixture_id, channel_id, payload_json) VALUES (%s, %s, %s)",
         ("slack_sales_acme", "slack_channel:sales-acme", slack_payload),
     )
+    cur.executemany(
+        """
+        INSERT INTO demo_linear_issues
+        (issue_id, team_id, title, description, state, priority, source_session_id,
+         created_by_agent_id, policy_decision_id, credential_lease_id)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        [
+            (
+                "LIN-demo-renewal", "linear_team:SALES", "Acme renewal baseline",
+                "Seed issue showing the demo Linear app before the agent creates follow-up work.",
+                "open", "medium", "sess_demo_001", "seed", "seed_policy", None,
+            ),
+        ],
+    )
+    cur.executemany(
+        """
+        INSERT INTO demo_slack_messages
+        (message_id, channel_id, user_id, user_name, text, source_session_id,
+         policy_decision_id, message_kind, is_untrusted)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        [
+            (
+                "msg_sales_acme_001", "slack_channel:sales-acme", "user_alice", "Alice",
+                "Acme renewal discussion: contract ends Q3 and the customer wants pricing detail.",
+                "sess_demo_001", "seed_policy", "message", 0,
+            ),
+            (
+                "msg_sales_acme_002", "slack_channel:sales-acme", "user_bob", "Bob",
+                "Please create a follow-up issue once the renewal summary is ready.",
+                "sess_demo_001", "seed_policy", "message", 0,
+            ),
+            (
+                "msg_sales_acme_003", "slack_channel:sales-acme", "external_note", "External Note",
+                "Untrusted customer-provided text should remain data and must not expand the session goal.",
+                "sess_demo_001", "seed_policy", "untrusted_context", 1,
+            ),
+        ],
+    )
 
     for eid, etype, ej in [
         ("evt_001", "session_started", {"goal_class": "sales_renewal_prep"}),
@@ -441,9 +505,9 @@ def seed_demo() -> None:
             "departments": ["Sales", "Support", "Finance", "Engineering", "Customer Success"],
         }),
         ("evt_003", "credential_binding_seeded", {
-            "credential_ref_id": "credref_linear_sales",
+            "credential_ref_ids": ["credref_linear_sales", "credref_slack_sales"],
             "provider": "1password",
-            "tool_id": "linear.create_issue",
+            "tool_ids": ["linear.create_issue", "slack.search_messages"],
             "injection_mode": "gateway_header",
             "secret_exposed_to_agent": False,
         }),
@@ -1244,7 +1308,7 @@ def find_credential_binding(tool_id: str, scope: str, resource_id: str) -> dict[
         cur.execute(
             """
             SELECT credential_ref_id, provider, credential_class, owner_team,
-                   tool_id, scope, resource_id, injection_mode
+                   tool_id, scope, resource_id, injection_mode, secret_ref_handle
             FROM credential_bindings
             WHERE tool_id = %s AND scope = %s AND resource_id = %s
             LIMIT 1
@@ -1338,6 +1402,20 @@ def mark_credential_lease_used(lease_id: str, *, uses_remaining: int = 0) -> dic
         row = cur.fetchone()
     conn.close()
     return row
+
+
+def update_credential_lease_provider_operation(lease_id: str, provider_operation_id: str) -> None:
+    conn = connect()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE credential_leases
+            SET provider_operation_id = %s
+            WHERE lease_id = %s
+            """,
+            (provider_operation_id, lease_id),
+        )
+    conn.close()
 
 
 def attach_credential_lease_to_decision(decision_id: str, lease_id: str) -> None:
@@ -1441,6 +1519,74 @@ def list_department_traces() -> list[dict[str, Any]]:
         rows = list(cur.fetchall())
     conn.close()
     return rows
+
+
+def list_demo_linear_state(team_id: str | None = None) -> dict[str, Any]:
+    conn = connect()
+    with conn.cursor() as cur:
+        if team_id:
+            cur.execute(
+                """
+                SELECT *
+                FROM demo_linear_issues
+                WHERE team_id = %s
+                ORDER BY created_at DESC, issue_id DESC
+                """,
+                (team_id,),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT *
+                FROM demo_linear_issues
+                ORDER BY created_at DESC, issue_id DESC
+                """
+            )
+        issues = list(cur.fetchall())
+        issue_ids = [issue["issue_id"] for issue in issues]
+        if issue_ids:
+            placeholders = ", ".join(["%s"] * len(issue_ids))
+            cur.execute(
+                f"""
+                SELECT *
+                FROM demo_linear_comments
+                WHERE issue_id IN ({placeholders})
+                ORDER BY created_at ASC, comment_id ASC
+                """,
+                tuple(issue_ids),
+            )
+            comments = list(cur.fetchall())
+        else:
+            comments = []
+    conn.close()
+    return {"issues": issues, "comments": comments}
+
+
+def list_demo_slack_state(channel_id: str | None = None) -> dict[str, Any]:
+    conn = connect()
+    with conn.cursor() as cur:
+        if channel_id:
+            cur.execute(
+                """
+                SELECT *
+                FROM demo_slack_messages
+                WHERE channel_id = %s
+                ORDER BY created_at ASC, message_id ASC
+                """,
+                (channel_id,),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT *
+                FROM demo_slack_messages
+                ORDER BY channel_id ASC, created_at ASC, message_id ASC
+                """
+            )
+        messages = list(cur.fetchall())
+    conn.close()
+    channels = sorted({message["channel_id"] for message in messages})
+    return {"channels": channels, "messages": messages}
 
 
 def fetch_all_for_sync() -> dict[str, list[dict[str, Any]]]:

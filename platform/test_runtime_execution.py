@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import sys
+import types
 import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -50,16 +52,27 @@ class RuntimeExecutionTests(unittest.TestCase):
             consumed.append((grant_id, session_id, proof_id))
             return {"event_id": "evt_grant", "event_type": "grant_consumed", "event_hash": "hash_grant"}
 
-        result = execute_downstream_tool(
-            tool_id="linear.create_issue",
-            args={"session_id": "sess_demo_001", "title": "Acme renewal"},
-            resource_id="linear_team:SALES",
-            authorization=_approved_auth(grant_id="grant_linear_001"),
-            audit_writer=audit,
-            grant_consumer=consume,
+        fake_demo_apps = types.SimpleNamespace(
+            create_linear_issue=lambda **_: {
+                "issue_id": "LIN-test",
+                "team_id": "linear_team:SALES",
+                "title": "Acme renewal",
+                "status": "created",
+                "mode": "demo_mcp",
+            }
         )
+        with patch.dict(sys.modules, {"demo_apps": fake_demo_apps}):
+            result = execute_downstream_tool(
+                tool_id="linear.create_issue",
+                args={"session_id": "sess_demo_001", "title": "Acme renewal"},
+                resource_id="linear_team:SALES",
+                authorization=_approved_auth(grant_id="grant_linear_001"),
+                audit_writer=audit,
+                grant_consumer=consume,
+            )
 
         self.assertEqual(result["status"], "created")
+        self.assertEqual(result["mode"], "demo_mcp")
         self.assertEqual(consumed, [("grant_linear_001", "sess_demo_001", "proof_1")])
         self.assertTrue(any(event_type == "downstream_call_executed" for event_type, _ in events))
 

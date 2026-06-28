@@ -73,6 +73,7 @@ class PolicyAgentTests(unittest.TestCase):
 
         self.assertEqual(first.decision.value, "ALLOW")
         self.assertEqual(first.reason, "grant exists for scope@resource")
+        self.assertEqual(first.proof.policy_engine, "cozo-datalog")
         self.assertIn("allow_current_grant", first.proof.rules)
         self.assertEqual(first.proof.proof_hash, second.proof.proof_hash)
 

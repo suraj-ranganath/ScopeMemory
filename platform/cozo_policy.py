@@ -509,10 +509,7 @@ def decide(ctx: dict[str, Any]) -> PolicyDecision:
 
 
 def evaluate_compiled(compiled: CompiledPolicyFacts) -> PolicyEvaluation:
-    try:
-        return _evaluate_with_cozo(compiled)
-    except Exception as exc:
-        return _evaluate_with_python(compiled, fallback_error=exc)
+    return _evaluate_with_cozo(compiled)
 
 
 def evaluate(facts: dict[str, Any]) -> tuple[str, str, list[str]]:

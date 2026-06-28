@@ -12,6 +12,7 @@ from dolt_store import (
     connect,
     create_access_request,
     find_active_grant_for_tool,
+    find_credential_binding,
     get_session,
     issue_ephemeral_grant,
     list_access_requests,
@@ -233,6 +234,19 @@ def run_authorize(
         recipe_index_commit=_recipe_index_commit_from_hits(recipe_hits),
     )
     facts = dict(ctx.get("facts") or {})
+    credential_binding = find_credential_binding(tool_id, str(facts.get("scope") or ""), resource_id)
+    if credential_binding:
+        facts.update({
+            "credential_required": True,
+            "credential_class": credential_binding["credential_class"],
+            "credential_binding_available": True,
+            "credential_binding_id": credential_binding["credential_ref_id"],
+            "credential_ref": credential_binding["credential_ref_id"],
+            "credential_provider": credential_binding["provider"],
+            "credential_injection_mode": credential_binding["injection_mode"],
+            "credential_owner_team": credential_binding["owner_team"],
+            "secret_exposed_to_agent": False,
+        })
     facts.update({
         "context_snapshot_present": True,
         "context_snapshot_id": snapshot["snapshot_id"],
