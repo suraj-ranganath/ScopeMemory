@@ -563,12 +563,27 @@ a:focus-visible {
 }
 
 .request-row {
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
 }
 
 .request-row.anticipated {
   border-color: color-mix(in srgb, var(--warn) 34%, var(--line));
   background: color-mix(in srgb, var(--warn-soft) 48%, var(--panel-solid));
+}
+
+.request-row > div {
+  min-width: 0;
+}
+
+.request-row > .primary-button,
+.request-row > .pill {
+  justify-self: end;
+}
+
+.request-row > .primary-button {
+  white-space: nowrap;
 }
 
 .request-row small {
@@ -1209,6 +1224,16 @@ button:disabled {
   .work-grid,
   .topology {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .request-row {
+    grid-template-columns: 1fr;
+  }
+
+  .request-row > .primary-button,
+  .request-row > .pill {
+    justify-self: start;
+    margin-top: 12px;
   }
 }
 
