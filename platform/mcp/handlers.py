@@ -7,7 +7,8 @@ from typing import Any
 from fastapi import HTTPException
 
 from agentic_identity.auth import resolve_delegation_token
-from dolt_store import append_session_event, connect, consume_grant_for_tool
+from credential_runtime import mint_gateway_credential_lease
+from dolt_store import append_session_event, connect, consume_grant_for_tool, mark_access_request_tool_call_seen
 from gateway_service import list_policy_decisions, run_authorize, run_preflight
 from mcp.protocol import MCP_AUTH_REQUIRED, MCP_POLICY_DENIED, tool_result_text
 from mcp.registry import AUTH_TOOL_NAMES, DOWNSTREAM_TOOL_NAMES
@@ -152,9 +153,23 @@ def handle_tool_call(
     tool_intent = tool_intent_for(name, args, resource_id)
     append_session_event(
         session_id,
+        "hook_pre_tool_use_checked",
+        {
+            "agent_host": "codex",
+            "tool_id": name,
+            "resource_id": resource_id,
+            "route": "scope_memory_gateway",
+            "secret_access_pattern": "none",
+            "permission_decision": "allow",
+            "secret_exposed_to_agent": False,
+        },
+    )
+    append_session_event(
+        session_id,
         "tool_call_requested",
         {"tool_id": name, "resource_id": resource_id, "tool_intent": tool_intent},
     )
+    mark_access_request_tool_call_seen(session_id, name, resource_id)
     auth = run_authorize(session_id, agent_id, name, resource_id, claims)
     decision = auth["decision"]
 
@@ -176,7 +191,25 @@ def handle_tool_call(
                     "resource_id": resource_id,
                 },
             )
-        execution_auth = {**auth, "grant": auth.get("grant") or consumed_grant}
+        credential_lease = mint_gateway_credential_lease(
+            session_id=session_id,
+            tool_id=name,
+            scope=str(consumed_grant.get("scope") or ""),
+            resource_id=resource_id,
+            decision_id=auth["decision_id"],
+            proof_id=auth.get("proof_id", ""),
+        )
+        if credential_lease and credential_lease.get("state") != "used":
+            raise McpHandlerError(
+                MCP_POLICY_DENIED,
+                "credential lease could not be minted for approved execution",
+                credential_lease,
+            )
+        execution_auth = {
+            **auth,
+            "grant": auth.get("grant") or consumed_grant,
+            "credential_lease": credential_lease,
+        }
         try:
             execution = execute_downstream_tool(
                 tool_id=name,
@@ -197,6 +230,7 @@ def handle_tool_call(
                 "proof_id": auth.get("proof_id"),
                 "grant": auth.get("grant") or consumed_grant,
                 "consumed_grant": consumed_grant,
+                "credential_lease": credential_lease,
                 "tool_intent": tool_intent,
                 "execution": execution,
                 "proof_summary": _proof_summary(auth),

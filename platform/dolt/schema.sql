@@ -125,9 +125,51 @@ CREATE TABLE IF NOT EXISTS access_requests (
   proof_id VARCHAR(128),
   approver_type VARCHAR(64) NOT NULL DEFAULT 'human',
   expires_at TIMESTAMP NULL,
+  request_origin VARCHAR(64) NOT NULL DEFAULT 'tool_call_escalation',
+  prediction_id VARCHAR(128),
+  prediction_confidence DOUBLE,
+  source_trace_ids_json LONGTEXT,
+  trigger_phase VARCHAR(64) NOT NULL DEFAULT 'authorize',
+  created_before_tool_call TINYINT NOT NULL DEFAULT 0,
+  sent_at TIMESTAMP NULL,
+  first_tool_call_at TIMESTAMP NULL,
   status VARCHAR(64) NOT NULL DEFAULT 'pending',
   approver_id VARCHAR(128),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS credential_bindings (
+  credential_ref_id VARCHAR(128) PRIMARY KEY,
+  provider VARCHAR(64) NOT NULL,
+  credential_class VARCHAR(128) NOT NULL,
+  owner_team VARCHAR(128) NOT NULL,
+  tool_id VARCHAR(128) NOT NULL,
+  scope VARCHAR(255) NOT NULL,
+  resource_id VARCHAR(128) NOT NULL,
+  injection_mode VARCHAR(64) NOT NULL,
+  secret_ref_handle VARCHAR(255),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS credential_leases (
+  lease_id VARCHAR(128) PRIMARY KEY,
+  session_id VARCHAR(128) NOT NULL,
+  tool_id VARCHAR(128) NOT NULL,
+  scope VARCHAR(255) NOT NULL,
+  resource_id VARCHAR(128) NOT NULL,
+  credential_ref_id VARCHAR(128) NOT NULL,
+  credential_ref_hash VARCHAR(128) NOT NULL,
+  provider VARCHAR(64) NOT NULL,
+  provider_mode VARCHAR(128),
+  provider_operation_id VARCHAR(128),
+  injection_mode VARCHAR(64) NOT NULL,
+  secret_exposed_to_agent TINYINT NOT NULL DEFAULT 0,
+  max_uses INT NOT NULL DEFAULT 1,
+  uses_remaining INT NOT NULL DEFAULT 1,
+  expires_at TIMESTAMP NULL,
+  status VARCHAR(64) NOT NULL DEFAULT 'minted',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  used_at TIMESTAMP NULL
 );
 
 CREATE TABLE IF NOT EXISTS recipe_proposals (
@@ -146,6 +188,7 @@ CREATE TABLE IF NOT EXISTS session_events (
   session_id VARCHAR(128) NOT NULL,
   event_type VARCHAR(64) NOT NULL,
   event_json LONGTEXT NOT NULL,
+  event_order BIGINT,
   prev_event_hash VARCHAR(128),
   event_hash VARCHAR(128),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP

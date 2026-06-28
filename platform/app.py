@@ -181,6 +181,19 @@ def admin_reseed() -> dict[str, Any]:
     return {"status": "reseeded", "synced_rows": rows, "graph_engine": engine}
 
 
+@app.post("/demo/scenarios/hackathon/reseed")
+def hackathon_reseed() -> dict[str, Any]:
+    """Reset the hackathon web-app demo story."""
+    seed_demo()
+    rows, engine = sync_graph()
+    return {
+        "status": "reseeded",
+        "scenario": "hackathon_web_live_trace",
+        "synced_rows": rows,
+        "graph_engine": engine,
+    }
+
+
 # --- Person B (RFC-06): demo surface, fixtures, Memgraph recipe index, learning ---
 
 

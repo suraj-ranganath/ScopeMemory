@@ -149,7 +149,9 @@ a:focus-visible {
 
 .hero-pane,
 .topology,
+.presenter-controls,
 .work-grid,
+.live-trace-band,
 .decision-band,
 .two-column,
 .learning-panel,
@@ -312,6 +314,42 @@ a:focus-visible {
   margin-top: 14px;
 }
 
+.presenter-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(18px);
+  border-radius: 8px;
+}
+
+.live-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 9px 13px;
+  color: var(--warn);
+  background: var(--warn-soft);
+  border: 1px solid color-mix(in srgb, var(--warn) 42%, var(--line));
+  border-radius: 8px;
+  cursor: pointer;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.live-toggle.good {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+
 .metric {
   min-height: 96px;
   padding: 16px;
@@ -461,7 +499,9 @@ a:focus-visible {
 .recipe-list,
 .request-list,
 .decision-list,
-.lease-path {
+.lease-path,
+.department-traces,
+.lease-inspector {
   display: grid;
   gap: 10px;
 }
@@ -469,7 +509,11 @@ a:focus-visible {
 .recipe-row,
 .request-row,
 .decision-row,
-.lease-step {
+.lease-step,
+.department-row,
+.lease-record,
+.trace-event,
+.graph-node-row {
   border: 1px solid var(--line);
   background: color-mix(in srgb, var(--panel-solid) 80%, transparent);
   border-radius: 8px;
@@ -488,11 +532,56 @@ a:focus-visible {
   align-items: flex-start;
 }
 
+.request-row.anticipated {
+  border-color: color-mix(in srgb, var(--warn) 34%, var(--line));
+  background: color-mix(in srgb, var(--warn-soft) 48%, var(--panel-solid));
+}
+
 .request-row small {
   display: block;
   margin-top: 8px;
   color: var(--muted);
   line-height: 1.4;
+}
+
+.evidence-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.micro-label {
+  margin: 14px 0 0;
+  color: var(--muted);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.department-row {
+  display: grid;
+  grid-template-columns: minmax(70px, 0.3fr) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 10px;
+}
+
+.department-row span,
+.graph-node-row span {
+  color: var(--muted);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.department-row strong,
+.graph-node-row strong {
+  color: var(--text);
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .primary-button,
@@ -563,6 +652,115 @@ button:disabled {
   color: var(--muted);
 }
 
+.lease-record {
+  padding: 12px;
+}
+
+.lease-record-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.lease-record-head strong,
+.agent-status strong {
+  color: var(--text);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.lease-record dl {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 7px 10px;
+  margin: 0;
+}
+
+.lease-record dt {
+  color: var(--muted);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.lease-record dd {
+  margin: 0;
+  color: var(--text);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.live-trace-band {
+  padding: 20px;
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(18px);
+  border-radius: 8px;
+}
+
+.live-trace-band h2 {
+  margin: 0 0 16px;
+  color: var(--text);
+  font-size: 18px;
+}
+
+.trace-lanes {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(150px, 1fr));
+  gap: 10px;
+  overflow-x: auto;
+}
+
+.trace-lane {
+  min-width: 150px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel-solid) 76%, transparent);
+}
+
+.trace-lane h3 {
+  margin: 0 0 10px;
+  color: var(--accent);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.trace-lane p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.trace-event {
+  display: grid;
+  gap: 4px;
+  padding: 9px;
+  margin-bottom: 8px;
+}
+
+.trace-event strong {
+  color: var(--text);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.trace-event span,
+.trace-event small,
+.hash-line {
+  color: var(--muted);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
 .decision-band {
   display: grid;
   grid-template-columns: 300px minmax(0, 1fr);
@@ -612,6 +810,54 @@ button:disabled {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 14px;
   margin-top: 14px;
+}
+
+.context-graph-panel,
+.agent-run-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.graph-stats,
+.agent-run-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.graph-stats .metric,
+.agent-run-metrics .metric {
+  min-height: 74px;
+  padding: 12px;
+}
+
+.graph-node-list {
+  display: grid;
+  gap: 8px;
+  max-height: 330px;
+  overflow: auto;
+}
+
+.graph-node-row {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+}
+
+.agent-status {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel-solid) 80%, transparent);
+}
+
+.compact-audit .timeline {
+  max-height: 460px;
+  overflow: auto;
 }
 
 .timeline li {
@@ -681,6 +927,7 @@ button:disabled {
 
   .hero-pane,
   .topology,
+  .presenter-controls,
   .work-grid,
   .decision-band,
   .two-column,
@@ -691,10 +938,15 @@ button:disabled {
 
   .hero-pane,
   .topology,
+  .presenter-controls,
   .work-grid,
   .two-column,
   .learning-panel {
     grid-template-columns: 1fr;
+  }
+
+  .trace-lanes {
+    grid-template-columns: repeat(6, minmax(180px, 1fr));
   }
 
   .hero-copy,

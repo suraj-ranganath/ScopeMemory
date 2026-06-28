@@ -1,13 +1,13 @@
 import { Effect } from "effect";
 import {
   AlertTriangle,
-  ArrowUpRight,
   Check,
   CircleDot,
   Fingerprint,
   GitBranch,
   KeyRound,
   LockKeyhole,
+  Play,
   Moon,
   RefreshCw,
   Route,
@@ -19,13 +19,20 @@ import { useEffect, useMemo, useState } from "react";
 import {
   AccessRequest,
   AppModel,
+  ContextGraph,
+  CredentialLease,
+  DepartmentTrace,
   PolicyDecision,
   RecipeHit,
   TimelineEvent,
+  TraceEvent,
   approveRequest,
   loadAppModel,
   proposeRecipe,
-  searchSlack,
+  resetDemo,
+  resumeSlackRead,
+  runLinearIssue,
+  runPreflight,
   syncRecipes
 } from "./api";
 import "./styles.css";
@@ -36,7 +43,10 @@ type AsyncState = {
 };
 
 type ActionState = {
+  preflight: Record<string, unknown> | null;
+  linear: Record<string, unknown> | null;
   slack: Record<string, unknown> | null;
+  reset: Record<string, unknown> | null;
   proposal: Record<string, unknown> | null;
   sync: Record<string, unknown> | null;
 };
@@ -103,13 +113,27 @@ function useAppModel() {
 
 export default function App() {
   const { model, state, refresh } = useAppModel();
-  const [actions, setActions] = useState<ActionState>({ slack: null, proposal: null, sync: null });
+  const [actions, setActions] = useState<ActionState>({
+    preflight: null,
+    linear: null,
+    slack: null,
+    reset: null,
+    proposal: null,
+    sync: null
+  });
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [theme, setTheme] = useState<Theme>(initialTheme);
+  const [liveMode, setLiveMode] = useState(true);
 
   const session = model?.state.session;
   const decisions = model?.state.policy_decisions || [];
   const accessRequests = model?.state.access_requests || [];
+  const anticipatedRequests = model?.state.anticipated_requests || accessRequests.filter((request) => request.created_before_tool_call);
+  const credentialLeases = model?.state.credential_leases || [];
+  const traceEvents = model?.state.trace_events || [];
+  const departmentTraces = model?.state.department_traces || [];
+  const contextGraph = model?.state.context_graph || { nodes: [], edges: [] };
+  const agentRun = model?.state.agent_run;
   const visibleTools = model?.state.predicted_tools || [];
   const pendingCount = accessRequests.filter((request) => request.status === "pending").length;
   const mode = model?.state.mode || "offline";
@@ -117,6 +141,12 @@ export default function App() {
   useEffect(() => {
     window.localStorage.setItem("scopememory-theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    if (!liveMode) return;
+    const timer = window.setInterval(refresh, 2000);
+    return () => window.clearInterval(timer);
+  }, [liveMode, refresh]);
 
   const execute = <A,>(label: string, effect: Effect.Effect<A, unknown>, onSuccess: (value: A) => void) => {
     setBusyAction(label);
@@ -135,6 +165,13 @@ export default function App() {
 
   const approve = (request: AccessRequest) => {
     execute("approve", approveRequest(request.request_id), () => refresh());
+  };
+
+  const executeAndRefresh = <A,>(label: keyof ActionState, effect: Effect.Effect<A, unknown>) => {
+    execute(label, effect, (value) => {
+      setActions((current) => ({ ...current, [label]: value as Record<string, unknown> }));
+      refresh();
+    });
   };
 
   const latestDecision = decisions[decisions.length - 1];
@@ -195,6 +232,30 @@ export default function App() {
         <Metric label="Open requests" value={pendingCount.toString()} tone={pendingCount ? "warn" : "good"} />
       </section>
 
+      <section className="presenter-controls" aria-label="Hackathon presenter controls">
+        <button className="secondary-button" disabled={busyAction === "reset"} onClick={() => executeAndRefresh("reset", resetDemo())}>
+          <RefreshCw size={15} /> Reset demo
+        </button>
+        <button className="primary-button" disabled={busyAction === "preflight"} onClick={() => executeAndRefresh("preflight", runPreflight(session?.session_id, session?.agent_id))}>
+          <Route size={15} /> Run preflight
+        </button>
+        <button className="secondary-button" disabled={!anticipatedRequests.some((request) => request.status === "pending") || busyAction === "approve"} onClick={() => {
+          const pending = anticipatedRequests.find((request) => request.status === "pending");
+          if (pending) approve(pending);
+        }}>
+          <Check size={15} /> Approve as Bob
+        </button>
+        <button className="secondary-button" disabled={busyAction === "linear"} onClick={() => executeAndRefresh("linear", runLinearIssue(session?.session_id, session?.agent_id))}>
+          <KeyRound size={15} /> Run Linear with 1P lease
+        </button>
+        <button className="secondary-button" disabled={busyAction === "slack"} onClick={() => executeAndRefresh("slack", resumeSlackRead(session?.session_id, session?.agent_id))}>
+          <Play size={15} /> Resume Slack read
+        </button>
+        <button className={`live-toggle ${liveMode ? "good" : ""}`} onClick={() => setLiveMode((current) => !current)}>
+          <CircleDot size={13} /> {liveMode ? "Live polling" : "Polling paused"}
+        </button>
+      </section>
+
       {state.error ? <div className="notice danger">{state.error}</div> : null}
       {state.loading ? <div className="notice">Loading governed session...</div> : null}
 
@@ -217,6 +278,7 @@ export default function App() {
 
         <Panel title="Recipe memory" eyebrow="Predicted path" icon={<Sparkles size={18} />}>
           <RecipeList hits={model?.state.recipe_hits || []} />
+          <DepartmentTraceList traces={departmentTraces} />
           <div className="command-row">
             <button
               className="secondary-button"
@@ -229,13 +291,21 @@ export default function App() {
           {actions.sync ? <CodePlate value={actions.sync} /> : null}
         </Panel>
 
-        <Panel title="Access requests" eyebrow="Human gate" icon={<LockKeyhole size={18} />} id="requests">
-          <RequestList requests={accessRequests} onApprove={approve} busy={busyAction === "approve"} />
+        <Panel title="Anticipated access" eyebrow="Asked before tool call" icon={<LockKeyhole size={18} />} id="requests">
+          <AnticipatedRequestList requests={anticipatedRequests} onApprove={approve} busy={busyAction === "approve"} />
         </Panel>
 
         <Panel title="Credential lease" eyebrow="1Password broker" icon={<KeyRound size={18} />}>
-          <LeasePath grants={model?.state.grants || []} />
+          <CredentialLeasePanel leases={credentialLeases} grants={model?.state.grants || []} />
         </Panel>
+      </section>
+
+      <section className="live-trace-band">
+        <div>
+          <p className="eyebrow">Running trace</p>
+          <h2>Prediction, approval, policy, credential injection, and execution in one timeline.</h2>
+        </div>
+        <TraceLanes events={traceEvents} />
       </section>
 
       <section className="decision-band" id="proof">
@@ -247,19 +317,20 @@ export default function App() {
       </section>
 
       <section className="two-column" id="memory">
-        <Panel title="Timeline" eyebrow="Audit" icon={<GitBranch size={18} />}>
-          <Timeline events={model?.state.timeline || []} />
+        <Panel title="Context graph" eyebrow="Governed memory" icon={<GitBranch size={18} />}>
+          <ContextGraphPanel graph={contextGraph} />
         </Panel>
-        <Panel title="Adversarial context" eyebrow="Mock Slack" icon={<AlertTriangle size={18} />}>
-          <button
-            className="primary-button"
-            disabled={busyAction === "slack"}
-            onClick={() => execute("slack", searchSlack(), (slack) => setActions((current) => ({ ...current, slack: slack as Record<string, unknown> })))}
-          >
-            Inspect channel <ArrowUpRight size={15} />
-          </button>
-          {actions.slack ? <CodePlate value={actions.slack} /> : <EmptyLine text="No channel sample loaded." />}
+        <Panel title="Agent run" eyebrow="Long-horizon session" icon={<Play size={18} />}>
+          <AgentRunPanel run={agentRun} lastActions={actions} />
         </Panel>
+      </section>
+
+      <section className="decision-band compact-audit">
+        <div>
+          <p className="eyebrow">Audit</p>
+          <h2>Hash-chained events remain available below the live trace.</h2>
+        </div>
+        <Timeline events={model?.state.timeline || []} />
       </section>
 
       <section className="learning-panel">
@@ -391,6 +462,24 @@ function RecipeList({ hits }: { hits: RecipeHit[] }) {
   );
 }
 
+function DepartmentTraceList({ traces }: { traces: DepartmentTrace[] }) {
+  if (!traces.length) return null;
+  return (
+    <div className="department-traces">
+      <p className="micro-label">Reusable traces</p>
+      {traces.slice(0, 5).map((trace) => (
+        <div className="department-row" key={trace.recipe_id}>
+          <span>{trace.team_name}</span>
+          <strong>{trace.title}</strong>
+          <Pill tone={trace.has_human_gate ? "warn" : "quiet"}>
+            {trace.tool_count || 0} tools
+          </Pill>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function RequestList({ requests, onApprove, busy }: {
   requests: AccessRequest[];
   onApprove: (request: AccessRequest) => void;
@@ -419,6 +508,39 @@ function RequestList({ requests, onApprove, busy }: {
   );
 }
 
+function AnticipatedRequestList({ requests, onApprove, busy }: {
+  requests: AccessRequest[];
+  onApprove: (request: AccessRequest) => void;
+  busy: boolean;
+}) {
+  if (!requests.length) return <EmptyLine text="Run preflight to send predicted approval requests before tool calls." />;
+  return (
+    <div className="request-list">
+      {requests.map((request) => (
+        <article className="request-row anticipated" key={request.request_id}>
+          <div>
+            <strong>{request.requested_tool_id}</strong>
+            <span>{request.requested_scope} {"->"} {request.requested_resource}</span>
+            <small>{request.reason}</small>
+            <div className="evidence-line">
+              <Pill tone="good">origin: {request.request_origin || "prediction"}</Pill>
+              <Pill tone="warn">{request.created_before_tool_call ? "before tool call" : "at tool call"}</Pill>
+              {request.prediction_confidence ? <Pill>{Math.round(request.prediction_confidence * 100)}% confidence</Pill> : null}
+            </div>
+          </div>
+          {request.status === "pending" ? (
+            <button className="primary-button" disabled={busy} onClick={() => onApprove(request)}>
+              Approve <Check size={15} />
+            </button>
+          ) : (
+            <Pill tone={statusTone(request.status)}>{request.status}</Pill>
+          )}
+        </article>
+      ))}
+    </div>
+  );
+}
+
 function LeasePath({ grants }: { grants: Array<Record<string, unknown>> }) {
   return (
     <div className="lease-path">
@@ -429,6 +551,41 @@ function LeasePath({ grants }: { grants: Array<Record<string, unknown>> }) {
         </div>
       ))}
       <p>{grants.length ? `${grants.length} grant record${grants.length === 1 ? "" : "s"} ready` : "No credential material is exposed to the agent."}</p>
+    </div>
+  );
+}
+
+function CredentialLeasePanel({ leases, grants }: { leases: CredentialLease[]; grants: Array<Record<string, unknown>> }) {
+  if (!leases.length) {
+    return (
+      <div className="lease-path">
+        {["policy", "lease", "resolve", "execute"].map((step, index) => (
+          <div className="lease-step" key={step}>
+            <span>{index + 1}</span>
+            <strong>{step}</strong>
+          </div>
+        ))}
+        <p>{grants.length ? `${grants.length} grant record${grants.length === 1 ? "" : "s"} ready. Run Linear to mint a 1Password lease.` : "No credential material is exposed to the agent."}</p>
+      </div>
+    );
+  }
+  return (
+    <div className="lease-inspector">
+      {leases.map((lease) => (
+        <article className="lease-record" key={lease.lease_id}>
+          <div className="lease-record-head">
+            <strong>{lease.lease_id}</strong>
+            <Pill tone={lease.status === "used" ? "good" : "warn"}>{lease.status || "minted"}</Pill>
+          </div>
+          <dl>
+            <dt>provider</dt><dd>{lease.provider || "1password"}</dd>
+            <dt>mode</dt><dd>{lease.provider_mode || "broker"}</dd>
+            <dt>injection</dt><dd>{lease.injection_mode || "gateway_header"}</dd>
+            <dt>secret exposed</dt><dd>{String(Boolean(lease.secret_exposed_to_agent))}</dd>
+            <dt>credential hash</dt><dd>{lease.credential_ref_hash || "sha256:..."}</dd>
+          </dl>
+        </article>
+      ))}
     </div>
   );
 }
@@ -448,6 +605,73 @@ function DecisionList({ decisions }: { decisions: PolicyDecision[] }) {
           <CodePlate value={decision.proof || decision.proof_json || {}} />
         </article>
       ))}
+    </div>
+  );
+}
+
+function TraceLanes({ events }: { events: TraceEvent[] }) {
+  const lanes = ["Context", "Approval", "Policy", "Credential", "Execution", "Learning"];
+  if (!events.length) return <EmptyLine text="Run preflight to start the live trace." />;
+  return (
+    <div className="trace-lanes">
+      {lanes.map((lane) => {
+        const laneEvents = events.filter((event) => event.lane === lane).slice(-4);
+        return (
+          <div className="trace-lane" key={lane}>
+            <h3>{lane}</h3>
+            {laneEvents.length ? laneEvents.map((event, index) => (
+              <article className="trace-event" key={`${event.event_type}-${index}`}>
+                <strong>{event.event_type}</strong>
+                <span>{event.created_at || "demo time"}</span>
+                <small>{event.event_hash ? event.event_hash.slice(0, 18) : ""}</small>
+              </article>
+            )) : <p>No events yet.</p>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ContextGraphPanel({ graph }: { graph: ContextGraph }) {
+  const nodes = graph.nodes || [];
+  const edges = graph.edges || [];
+  if (!nodes.length) return <EmptyLine text="Run preflight to project the context graph." />;
+  return (
+    <div className="context-graph-panel">
+      <div className="graph-stats">
+        <Metric label="Nodes" value={nodes.length.toString()} />
+        <Metric label="Edges" value={edges.length.toString()} />
+      </div>
+      <div className="graph-node-list">
+        {nodes.slice(0, 10).map((node) => (
+          <div className="graph-node-row" key={String(node.node_id)}>
+            <span>{String(node.node_kind || "Node")}</span>
+            <strong>{String(node.label || node.source_id || node.node_id)}</strong>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AgentRunPanel({ run, lastActions }: { run?: { status: string; current_step: string; pending_approvals: number; approved_requests: number; policy_decisions: number; credential_leases: number; last_event_hash?: string }; lastActions: ActionState }) {
+  if (!run) return <EmptyLine text="No agent run loaded." />;
+  return (
+    <div className="agent-run-panel">
+      <div className="agent-status">
+        <Pill tone={statusTone(run.status)}>{run.status}</Pill>
+        <strong>{run.current_step}</strong>
+      </div>
+      <div className="agent-run-metrics">
+        <Metric label="Pending" value={run.pending_approvals.toString()} tone={run.pending_approvals ? "warn" : "good"} />
+        <Metric label="Approved" value={run.approved_requests.toString()} />
+        <Metric label="Policy" value={run.policy_decisions.toString()} />
+        <Metric label="Leases" value={run.credential_leases.toString()} />
+      </div>
+      {run.last_event_hash ? <p className="hash-line">Last event {run.last_event_hash}</p> : null}
+      {lastActions.linear ? <CodePlate value={lastActions.linear} /> : null}
+      {lastActions.slack ? <CodePlate value={lastActions.slack} /> : null}
     </div>
   );
 }

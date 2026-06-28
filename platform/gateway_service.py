@@ -9,6 +9,7 @@ from authorization_checks import AuthorizationCheckService
 from dolt_store import (
     append_session_event,
     attach_decision_to_snapshot,
+    connect,
     create_access_request,
     find_active_grant_for_tool,
     get_session,
@@ -143,6 +144,13 @@ def run_preflight(session_id: str, agent_id: str, jwt_claims: dict[str, Any]) ->
             "recipe_retrieval": retrieval_engine,
         },
     )
+    anticipated_requests = _create_anticipated_requests(
+        session=session,
+        agent_id=agent_id,
+        ctx=ctx,
+        recipe_hits=recipe_hits,
+        snapshot=snapshot,
+    )
     active_grants = list_active_grants(session_id)
     access_requests = list_access_requests(session_id)
     visible_tools = _visible_tools_for_preflight(session_id, ctx.get("predicted_tools") or [])
@@ -177,6 +185,7 @@ def run_preflight(session_id: str, agent_id: str, jwt_claims: dict[str, Any]) ->
         "visible_tools": visible_tools,
         "active_grants": active_grants,
         "access_requests": access_requests,
+        "anticipated_access_requests": anticipated_requests,
         "pending_access_requests": [
             req for req in access_requests if req.get("status") == "pending"
         ],
@@ -358,6 +367,120 @@ def run_authorize(
         "grant": grant,
         "access_request": access_request,
     }
+
+
+def _create_anticipated_requests(
+    *,
+    session: dict[str, Any],
+    agent_id: str,
+    ctx: dict[str, Any],
+    recipe_hits: list[dict[str, Any]],
+    snapshot: dict[str, Any],
+) -> list[dict[str, Any]]:
+    matched = ctx.get("matched_recipe") or {}
+    matched_recipe_id = matched.get("recipe_id") or matched.get("id")
+    recipe_ids = [str(hit["recipe_id"]) for hit in recipe_hits if hit.get("recipe_id")]
+    if matched_recipe_id and matched_recipe_id not in recipe_ids:
+        recipe_ids.insert(0, str(matched_recipe_id))
+    if not recipe_ids:
+        return []
+
+    score_by_recipe = {str(hit.get("recipe_id")): float(hit.get("score", 0.89)) for hit in recipe_hits}
+    conn = connect()
+    with conn.cursor() as cur:
+        placeholders = ", ".join(["%s"] * len(recipe_ids))
+        cur.execute(
+            f"""
+            SELECT rs.recipe_id, rs.scope, rs.approval_mode, ts.tool_id
+            FROM recipe_scopes rs
+            JOIN tool_scopes ts ON ts.scope = rs.scope
+            WHERE rs.recipe_id IN ({placeholders})
+              AND rs.approval_mode = 'human_required'
+            ORDER BY FIELD(rs.recipe_id, {placeholders}), ts.tool_id
+            """,
+            tuple(recipe_ids + recipe_ids),
+        )
+        requirements = cur.fetchall()
+        resources_by_scope = _resources_by_scope(cur, session["team_id"])
+    conn.close()
+
+    created: list[dict[str, Any]] = []
+    for req in requirements:
+        resource_id = resources_by_scope.get(req["scope"])
+        if not resource_id:
+            continue
+        prediction_id = "pred_" + stable_hash({
+            "session_id": session["session_id"],
+            "recipe_id": req["recipe_id"],
+            "tool_id": req["tool_id"],
+            "scope": req["scope"],
+            "resource_id": resource_id,
+            "snapshot_id": snapshot["snapshot_id"],
+        }).split(":", 1)[1][:12]
+        confidence = score_by_recipe.get(str(req["recipe_id"]), 0.89)
+        append_session_event(
+            session["session_id"],
+            "scope_predicted",
+            {
+                "prediction_id": prediction_id,
+                "recipe_id": req["recipe_id"],
+                "tool_id": req["tool_id"],
+                "scope": req["scope"],
+                "resource_id": resource_id,
+                "approval_mode": req["approval_mode"],
+                "confidence": confidence,
+                "snapshot_id": snapshot["snapshot_id"],
+            },
+        )
+        created.append(create_access_request(
+            session_id=session["session_id"],
+            user_id=session["user_id"],
+            agent_id=agent_id,
+            requested_scope=req["scope"],
+            requested_resource=resource_id,
+            requested_tool_id=req["tool_id"],
+            reason=(
+                "Preflight predicted this human-required scope from governed "
+                f"recipe memory ({req['recipe_id']})."
+            ),
+            recipe_id=req["recipe_id"],
+            proof_id=stable_hash({
+                "prediction_id": prediction_id,
+                "snapshot_id": snapshot["snapshot_id"],
+                "scope": req["scope"],
+                "resource_id": resource_id,
+            }),
+            request_origin="preflight_prediction",
+            prediction_id=prediction_id,
+            prediction_confidence=confidence,
+            source_trace_ids=recipe_ids[:5],
+            trigger_phase="preflight",
+            created_before_tool_call=True,
+        ))
+    return created
+
+
+def _resources_by_scope(cur, team_id: str) -> dict[str, str]:
+    cur.execute(
+        """
+        SELECT resource_id, sensitivity, external_flag
+        FROM resources
+        WHERE team_id = %s
+        ORDER BY external_flag ASC, sensitivity = 'restricted' DESC, resource_id
+        """,
+        (team_id,),
+    )
+    rows = cur.fetchall()
+    resources: dict[str, str] = {}
+    for row in rows:
+        resource_id = row["resource_id"]
+        if resource_id.startswith("slack_channel:") and not row["external_flag"]:
+            resources.setdefault("slack:channels:history", resource_id)
+        if resource_id.startswith("linear_team:"):
+            resources.setdefault("linear:issues:create", resource_id)
+            resources.setdefault("linear:issues:read", resource_id)
+            resources.setdefault("linear:comments:create", resource_id)
+    return resources
 
 
 def list_policy_decisions(session_id: str) -> list[dict[str, Any]]:
