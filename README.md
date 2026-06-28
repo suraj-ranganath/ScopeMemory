@@ -73,102 +73,6 @@ repository, the practical zero-knowledge claim is zero secret exposure to agents
 and ScopeMemory persistence, which minimizes credential leakage through prompts,
 transcripts, tool inputs, logs, Dolt, Qdrant, and UI surfaces.
 
-## What is implemented
-
-ScopeMemory currently has several runnable surfaces.
-
-### 1. RFC-07 terminal demo
-
-The `demo/` implementation is the binding first build: Python + SQLite, no
-network, no Docker, no secrets.
-
-```bash
-cd demo
-python run_demo.py all
-```
-
-It demonstrates:
-
-- Agentic-IAM identity mirroring through `agents.identity_ref`
-- user-to-agent delegation for a bounded session
-- recipe-based preflight for predicted tools and scopes
-- ReBAC authorization through `context_path` and tuple output
-- `ALLOW`, `DENY`, and `ESCALATE_HUMAN` decisions
-
-Expected final output includes:
-
-```text
-DEMO PASSED
-```
-
-### 2. Platform stack
-
-The `platform/` stack extends the demo into a service-shaped prototype:
-
-```bash
-cd platform
-python3 init_dolt_user.py
-chmod +x run_stack.sh
-./run_stack.sh
-```
-
-It runs:
-
-- a FastAPI gateway with `/auth/preflight`, `/auth/authorize`, proof APIs, and
-  a JSON-RPC MCP endpoint
-- Dolt as the canonical store for sessions, recipes, grants, and audit records
-- Memgraph as a derived graph query engine, with an in-process graph fallback
-  when Memgraph is unavailable
-- embedded Cozo Datalog policy rules and proof hashes
-- Agentic Identity delegation JWTs and a mock/live IAM adapter boundary
-- credential-broker and hook-adapter scaffolding for 1Password-backed,
-  broker-only secret access
-
-Expected final line:
-
-```text
-STACK DEMO PASSED
-```
-
-### 3. Agentic Identity and MCP demos
-
-Run the focused demos after starting the gateway stack:
-
-```bash
-cd platform
-docker compose --profile gateway-docker up -d --build
-python3 run_agentic_identity_demo.py
-python3 run_mcp_demo.py
-```
-
-The Agentic Identity demo covers signed delegation JWTs, identity proof, and
-ReBAC authorization. The MCP demo exposes ScopeMemory as a meta-MCP server where
-`tools/call` requires a delegation JWT and policy gates downstream tools such as
-`linear.create_issue`, `slack.search_messages`, and `slack.post_message`.
-
-### 4. Product surface and UI
-
-The Person B demo exercises recipe retrieval, access requests, denial paths,
-learning proposals, and UI state:
-
-```bash
-cd platform
-docker compose --profile gateway-docker up -d --build
-python3 run_person_b_demo.py all
-```
-
-Open the gateway-served UI at http://127.0.0.1:8080/.
-
-For the React frontend:
-
-```bash
-cd platform
-docker compose --profile gateway-docker up -d --build
-./run_ui.sh
-```
-
-Open http://localhost:5173. The UI talks to the gateway on `:8080`.
-
 ## Architecture
 
 ```mermaid
@@ -291,18 +195,6 @@ The platform Python dependencies are listed in
 [`platform/requirements.txt`](platform/requirements.txt). The React UI
 dependencies live in [`platform/web/package.json`](platform/web/package.json).
 
-## Roadmap
-
-The first build intentionally proves the authorization story before adding every
-production integration. Next steps:
-
-1. Deepen Qdrant semantic recipe retrieval alongside the Memgraph graph index.
-2. Expand async access request prediction from current MCP calls.
-3. Connect live Agentic-IAM instead of the mock adapter.
-4. Wire live 1Password provider resolution into the existing broker path.
-5. Replace mock downstream Slack/Linear calls with real MCP proxies.
-6. Grow the learning worker that proposes new recipes from successful sessions.
-
 ## Contributing
 
 Keep changes grounded in the RFCs and decision log. The project uses `bd`
@@ -313,14 +205,6 @@ When changing behavior, include a runnable verification path. For the demo,
 `python demo/run_demo.py all` should remain fast and dependency-free. For the
 platform, keep proof shape stable: decisions should include a reason, facts,
 `context_path`, and an audit/proof record.
-
-## Status
-
-RFC-07 is the binding first build. The platform stack, Agentic Identity
-delegation path, MCP gateway, Memgraph recipe retrieval, credential-broker
-scaffolding, and UI demos are runnable prototypes for the fuller architecture.
-Deep Qdrant retrieval, live Agentic-IAM, live 1Password execution, real
-downstream MCP proxies, and broader recipe learning remain Phase 2.
 
 ## License
 
