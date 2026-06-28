@@ -18,8 +18,5 @@
       "/mock-iam/*",
       "/codex/*"
     ]
-  },
-  "vars": {
-    "SCOPEMEMORY_API_ORIGIN": "https://replace-with-cloudflare-tunnel.example.com"
   }
 }
