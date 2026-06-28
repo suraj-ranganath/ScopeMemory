@@ -1,0 +1,25 @@
+{
+  "name": "scopememory-demo",
+  "main": "./worker.js",
+  "compatibility_date": "2026-06-28",
+  "assets": {
+    "directory": "./dist/",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": [
+      "/health",
+      "/auth/*",
+      "/admin/*",
+      "/demo/*",
+      "/fixtures/*",
+      "/iam/*",
+      "/index/*",
+      "/mcp",
+      "/mcp/*",
+      "/mock-iam/*",
+      "/codex/*"
+    ]
+  },
+  "vars": {
+    "SCOPEMEMORY_API_ORIGIN": "https://replace-with-cloudflare-tunnel.example.com"
+  }
+}
