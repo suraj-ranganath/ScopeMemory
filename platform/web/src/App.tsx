@@ -60,6 +60,7 @@ type ActionState = {
 };
 
 type Theme = "dark" | "light";
+const THEME_DEFAULT_REVISION = "light-default-v1";
 
 const money = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
 
@@ -94,8 +95,10 @@ function compactJson(value: unknown) {
 }
 
 function initialTheme(): Theme {
+  const defaultRevision = window.localStorage.getItem("scopememory-theme-default-revision");
   const saved = window.localStorage.getItem("scopememory-theme");
-  return saved === "light" ? "light" : "dark";
+  if (defaultRevision !== THEME_DEFAULT_REVISION) return "light";
+  return saved === "dark" ? "dark" : "light";
 }
 
 function useAppModel() {
@@ -152,6 +155,7 @@ export default function App() {
 
   useEffect(() => {
     window.localStorage.setItem("scopememory-theme", theme);
+    window.localStorage.setItem("scopememory-theme-default-revision", THEME_DEFAULT_REVISION);
   }, [theme]);
 
   useEffect(() => {
@@ -252,11 +256,9 @@ export default function App() {
       <section className="hero-pane" id="session">
         <div className="hero-copy">
           <p className="eyebrow">ScopeMemory control room</p>
-          <h1>{session?.goal || "Memory-informed authorization for MCP agents"}</h1>
+          <h1>ScopeMemory</h1>
           <p className="session-summary">
-            ScopeMemory sits between an AI agent and the tools it wants to use. It compares
-            the session goal against accepted workflow memory, decides each tool call, and
-            keeps credentials out of the agent context.
+            Least-privilege org memory-informed authorization for long horizon multi-agent system
           </p>
           <div className="session-strip">
             <Pill tone={statusTone(session?.status || model?.state.ui_status)}>{session?.status || model?.state.ui_status || "offline"}</Pill>
@@ -274,6 +276,11 @@ export default function App() {
           rules={proofRules}
           decision={latestDecision?.decision || (pendingCount ? "ESCALATE_HUMAN" : "ALLOW")}
         />
+      </section>
+
+      <section className="current-goal-band" aria-label="Current session goal">
+        <p className="eyebrow">Current goal</p>
+        <strong>{session?.goal || "Memory-informed authorization for MCP agents"}</strong>
       </section>
 
       <section className="topology">
@@ -312,7 +319,6 @@ export default function App() {
       </section>
 
       {state.error ? <div className="notice danger">{state.error}</div> : null}
-      {state.loading ? <div className="notice">Loading governed session...</div> : null}
 
       <section className="work-grid">
         <Panel
@@ -493,23 +499,24 @@ function ProofSpine({ rules, decision }: { rules: string[]; decision: string }) 
         ? "allow"
         : "decide";
   const nodes = ["goal", "recipe", "grant", "lease", decisionLabel];
+  const spinePath = "M48 104 C88 54 132 54 178 90 C226 128 274 132 320 104 C366 76 420 58 462 74 C512 92 552 126 592 104";
+  const points = [
+    { x: 48, y: 104, labelY: 174 },
+    { x: 178, y: 90, labelY: 174 },
+    { x: 320, y: 104, labelY: 174 },
+    { x: 462, y: 74, labelY: 174 },
+    { x: 592, y: 104, labelY: 174 }
+  ];
   return (
     <div className="proof-spine" aria-label="Proof path">
-      <svg viewBox="0 0 660 260" role="img" aria-label="Authorization proof path">
-        <path className="spine-track" d="M52 134 C150 26 224 232 330 128 S522 36 606 134" />
-        <path className="spine-glow" d="M52 134 C150 26 224 232 330 128 S522 36 606 134" />
+      <svg viewBox="0 0 640 220" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Authorization proof path">
+        <path className="spine-track" d={spinePath} pathLength="100" />
+        <path className="spine-glow" d={spinePath} pathLength="100" />
         {nodes.map((node, index) => {
-          const points = [
-            { x: 52, y: 134, labelY: 186 },
-            { x: 188, y: 108, labelY: 186 },
-            { x: 330, y: 128, labelY: 186 },
-            { x: 472, y: 104, labelY: 186 },
-            { x: 606, y: 134, labelY: 186 }
-          ];
           const { x, y, labelY } = points[index];
           return (
             <g key={node} className="spine-node">
-              <circle cx={x} cy={y} r="18" />
+              <circle cx={x} cy={y} r="17" />
               <text x={x} y={labelY} textAnchor="middle">{node}</text>
             </g>
           );

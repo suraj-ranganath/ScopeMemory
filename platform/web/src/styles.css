@@ -202,7 +202,7 @@ a:focus-visible {
 }
 
 .hero-copy h1 {
-  max-width: 980px;
+  max-width: 680px;
   margin: 0;
   font-family: Newsreader, Georgia, serif;
   font-size: clamp(30px, 3.7vw, 46px);
@@ -227,6 +227,32 @@ a:focus-visible {
   align-items: center;
   gap: 9px;
   margin-top: 22px;
+}
+
+.current-goal-band {
+  grid-column: 2;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px 18px;
+  align-items: baseline;
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(18px);
+  border-radius: 8px;
+}
+
+.current-goal-band .eyebrow {
+  margin: 0;
+}
+
+.current-goal-band strong {
+  color: var(--text);
+  font-size: clamp(16px, 1.45vw, 22px);
+  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .app-link-row {
@@ -261,7 +287,9 @@ a:focus-visible {
   position: relative;
   display: grid;
   align-content: center;
+  justify-items: center;
   min-height: 318px;
+  padding: 20px 20px 56px;
   overflow: hidden;
   background:
     radial-gradient(circle at 50% 48%, color-mix(in srgb, var(--accent) 17%, transparent), transparent 18rem),
@@ -270,7 +298,9 @@ a:focus-visible {
 
 .proof-spine svg {
   width: 100%;
+  max-width: 640px;
   height: auto;
+  display: block;
 }
 
 .spine-track,
@@ -286,7 +316,7 @@ a:focus-visible {
 
 .spine-glow {
   stroke: var(--accent);
-  stroke-dasharray: 380 1200;
+  stroke-dasharray: 58 100;
   filter: drop-shadow(0 0 12px color-mix(in srgb, var(--accent) 55%, transparent));
 }
 
@@ -465,6 +495,7 @@ a:focus-visible {
   display: block;
   color: var(--text);
   font-size: 15px;
+  overflow-wrap: anywhere;
 }
 
 .identity-lockup span,
@@ -555,11 +586,13 @@ a:focus-visible {
 
 .recipe-row,
 .request-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   padding: 13px;
+  min-width: 0;
 }
 
 .request-row {
@@ -568,13 +601,14 @@ a:focus-visible {
   align-items: start;
 }
 
+.recipe-row > div,
+.request-row > div {
+  min-width: 0;
+}
+
 .request-row.anticipated {
   border-color: color-mix(in srgb, var(--warn) 34%, var(--line));
   background: color-mix(in srgb, var(--warn-soft) 48%, var(--panel-solid));
-}
-
-.request-row > div {
-  min-width: 0;
 }
 
 .request-row > .primary-button,
@@ -582,7 +616,9 @@ a:focus-visible {
   justify-self: end;
 }
 
-.request-row > .primary-button {
+.request-row.anticipated .primary-button {
+  align-self: start;
+  min-width: 104px;
   white-space: nowrap;
 }
 
@@ -1259,6 +1295,7 @@ button:disabled {
   }
 
   .hero-pane,
+  .current-goal-band,
   .topology,
   .presenter-controls,
   .work-grid,
@@ -1294,7 +1331,19 @@ button:disabled {
   }
 
   .proof-spine {
-    min-height: 270px;
+    min-height: 240px;
+  }
+
+  .current-goal-band {
+    grid-template-columns: 1fr;
+  }
+
+  .request-row {
+    grid-template-columns: 1fr;
+  }
+
+  .request-row.anticipated .primary-button {
+    justify-self: start;
   }
 
   .decision-row {
