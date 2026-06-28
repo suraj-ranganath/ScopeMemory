@@ -16,8 +16,8 @@ from test_credential_hooks import _binding  # noqa: E402
 
 
 class OnePasswordProviderTests(unittest.TestCase):
-    def test_resolves_with_fake_op_without_exposing_secret_in_metadata(self) -> None:
-        op_path = _fake_op('printf "%s" "resolved-demo-token"')
+    def test_resolves_with_fake_op_without_returning_secret_to_gateway(self) -> None:
+        op_path = _fake_op()
         lease_use = _approved_lease_use()
 
         result = OnePasswordProvider(op_path=op_path).resolve_for_lease(
@@ -26,11 +26,9 @@ class OnePasswordProviderTests(unittest.TestCase):
         )
 
         self.assertEqual(result.state, ProviderResolveState.RESOLVED)
-        assert result.secret is not None
-        self.assertEqual(result.secret.reveal_to_broker(), "resolved-demo-token")
-        self.assertNotIn("resolved-demo-token", repr(result.secret))
         self.assertNotIn("resolved-demo-token", str(result.safe_metadata()))
         self.assertFalse(result.safe_metadata()["secret_exposed_to_agent"])
+        self.assertFalse(result.safe_metadata()["secret_known_to_gateway"])
 
     def test_requires_approved_lease_use(self) -> None:
         minted = _broker().mint_lease(_request())
@@ -44,16 +42,15 @@ class OnePasswordProviderTests(unittest.TestCase):
             caller="agent",
         ))
 
-        result = OnePasswordProvider(op_path=_fake_op("echo should-not-run")).resolve_for_lease(
+        result = OnePasswordProvider(op_path=_fake_op()).resolve_for_lease(
             denied_use,
             "op://ScopeMemory Demo/Linear API Token/token",
         )
 
         self.assertEqual(result.state, ProviderResolveState.DENIED)
-        self.assertIsNone(result.secret)
 
     def test_locked_or_cancelled_cli_escalates_human(self) -> None:
-        op_path = _fake_op('echo "no account found for filter" >&2; exit 1')
+        op_path = _fake_op(run_body='echo "no account found for filter" >&2; exit 1')
 
         result = OnePasswordProvider(op_path=op_path).resolve_for_lease(
             _approved_lease_use(),
@@ -61,16 +58,14 @@ class OnePasswordProviderTests(unittest.TestCase):
         )
 
         self.assertEqual(result.state, ProviderResolveState.ESCALATE_HUMAN)
-        self.assertIsNone(result.secret)
 
     def test_invalid_reference_is_denied_before_cli_call(self) -> None:
-        result = OnePasswordProvider(op_path=_fake_op("echo should-not-run")).resolve_for_lease(
+        result = OnePasswordProvider(op_path=_fake_op()).resolve_for_lease(
             _approved_lease_use(),
             "not-a-secret-reference",
         )
 
         self.assertEqual(result.state, ProviderResolveState.DENIED)
-        self.assertIsNone(result.secret)
 
 
 def _approved_lease_use():
@@ -112,10 +107,15 @@ def _broker() -> CredentialBroker:
     return CredentialBroker(readiness)
 
 
-def _fake_op(body: str) -> str:
+def _fake_op(run_body: str | None = None) -> str:
     temp_dir = tempfile.mkdtemp(prefix="scopememory-op-")
     op_path = Path(temp_dir) / "op"
-    op_path.write_text(f"#!/bin/sh\nif [ \"$1\" != \"read\" ]; then exit 2; fi\n{body}\n")
+    body = run_body or (
+        'shift\n'
+        'if [ "$1" = "--" ]; then shift; fi\n'
+        'SCOPEMEMORY_1P_SECRET="resolved-demo-token" "$@"\n'
+    )
+    op_path.write_text(f"#!/bin/sh\nif [ \"$1\" != \"run\" ]; then exit 2; fi\n{body}\n")
     os.chmod(op_path, 0o700)
     return str(op_path)
 
