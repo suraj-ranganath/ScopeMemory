@@ -298,13 +298,13 @@ export default function App() {
           <Check size={15} /> Approve as Bob
         </button>
         <button className="secondary-button" disabled={busyAction === "linear"} onClick={() => executeAndRefresh("linear", runLinearIssue(session?.session_id, session?.agent_id))}>
-          <KeyRound size={15} /> Run Linear with 1P lease
+          <KeyRound size={15} /> Linear + 1P lease
         </button>
         <button className="secondary-button" disabled={busyAction === "slack"} onClick={() => executeAndRefresh("slack", resumeSlackRead(session?.session_id, session?.agent_id))}>
-          <Play size={15} /> Resume Slack read
+          <Play size={15} /> Resume Slack
         </button>
         <button className="secondary-button danger-action" disabled={busyAction === "rejectedSlack"} onClick={() => executeAndRefresh("rejectedSlack", attemptSlackPost(session?.session_id, session?.agent_id))}>
-          <X size={15} /> Attempt rejected Slack post
+          <X size={15} /> Try blocked Slack post
         </button>
         <button className={`live-toggle ${liveMode ? "good" : ""}`} onClick={() => setLiveMode((current) => !current)}>
           <CircleDot size={13} /> {liveMode ? "Live polling" : "Polling paused"}
