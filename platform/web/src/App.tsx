@@ -495,23 +495,22 @@ function ProofSpine({ rules, decision }: { rules: string[]; decision: string }) 
   const nodes = ["goal", "recipe", "grant", "lease", decisionLabel];
   return (
     <div className="proof-spine" aria-label="Proof path">
-      <svg viewBox="0 0 660 260" role="img" aria-labelledby="proof-title">
-        <title id="proof-title">Authorization proof path</title>
+      <svg viewBox="0 0 660 260" role="img" aria-label="Authorization proof path">
         <path className="spine-track" d="M52 134 C150 26 224 232 330 128 S522 36 606 134" />
         <path className="spine-glow" d="M52 134 C150 26 224 232 330 128 S522 36 606 134" />
         {nodes.map((node, index) => {
           const points = [
-            [52, 134],
-            [188, 108],
-            [330, 128],
-            [472, 104],
-            [606, 134]
+            { x: 52, y: 134, labelY: 186 },
+            { x: 188, y: 108, labelY: 186 },
+            { x: 330, y: 128, labelY: 186 },
+            { x: 472, y: 104, labelY: 186 },
+            { x: 606, y: 134, labelY: 186 }
           ];
-          const [x, y] = points[index];
+          const { x, y, labelY } = points[index];
           return (
             <g key={node} className="spine-node">
               <circle cx={x} cy={y} r="18" />
-              <text x={x} y={y + 43} textAnchor="middle">{node}</text>
+              <text x={x} y={labelY} textAnchor="middle">{node}</text>
             </g>
           );
         })}

@@ -1404,20 +1404,6 @@ def mark_credential_lease_used(lease_id: str, *, uses_remaining: int = 0) -> dic
     return row
 
 
-def update_credential_lease_provider_operation(lease_id: str, provider_operation_id: str) -> None:
-    conn = connect()
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            UPDATE credential_leases
-            SET provider_operation_id = %s
-            WHERE lease_id = %s
-            """,
-            (provider_operation_id, lease_id),
-        )
-    conn.close()
-
-
 def attach_credential_lease_to_decision(decision_id: str, lease_id: str) -> None:
     conn = connect()
     with conn.cursor() as cur:

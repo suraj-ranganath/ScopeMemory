@@ -17,10 +17,8 @@ from dolt_store import (
     find_credential_binding,
     mark_credential_lease_used,
     save_credential_lease,
-    update_credential_lease_provider_operation,
 )
-from onepassword_provider import OnePasswordProvider, ProviderResolveState
-from onepassword_readiness import detect_onepassword_readiness
+from onepassword_readiness import OnePasswordProviderStatus, OnePasswordReadiness
 
 
 def mint_gateway_credential_lease(
@@ -34,8 +32,9 @@ def mint_gateway_credential_lease(
 ) -> dict[str, Any] | None:
     """Mint and authorize a broker-owned lease for a credential-bound tool call.
 
-    The gateway resolves the provider reference only after policy approves
-    the lease use, and only inside the broker-owned execution boundary.
+    The hackathon path records the opaque lease and gateway injection boundary
+    without resolving a live 1Password secret. Live provider setup is handled
+    later; this path still keeps the secret handle out of agent-visible traces.
     """
 
     binding_row = find_credential_binding(tool_id, scope, resource_id)
@@ -54,11 +53,11 @@ def mint_gateway_credential_lease(
             "provider": binding_row["provider"],
             "injection_mode": binding_row["injection_mode"],
             "secret_exposed_to_agent": False,
+            "secret_known_to_gateway": False,
         },
     )
 
-    readiness = detect_onepassword_readiness()
-    broker = CredentialBroker(readiness)
+    broker = CredentialBroker(_demo_ready_onepassword())
     binding = CredentialBinding(
         credential_ref_id=binding_row["credential_ref_id"],
         provider=binding_row["provider"],
@@ -88,6 +87,7 @@ def mint_gateway_credential_lease(
                 "state": minted.state.value,
                 "safe_reason": minted.safe_reason,
                 "setup_required": list(minted.setup_required),
+                "secret_known_to_gateway": False,
             },
         )
         return {
@@ -110,6 +110,7 @@ def mint_gateway_credential_lease(
             "provider_mode": minted.lease.provider_mode,
             "injection_mode": minted.lease.injection_mode,
             "secret_exposed_to_agent": False,
+            "secret_known_to_gateway": False,
             "max_uses": minted.lease.max_uses,
             "expires_at": minted.lease.expires_at,
         },
@@ -133,6 +134,7 @@ def mint_gateway_credential_lease(
                 "state": lease_use.state.value,
                 "safe_reason": lease_use.safe_reason,
                 "secret_exposed_to_agent": False,
+                "secret_known_to_gateway": False,
             },
         )
         return {
@@ -141,37 +143,8 @@ def mint_gateway_credential_lease(
             "lease": lease_row,
         }
 
-    provider = OnePasswordProvider(op_path=readiness.op_cli_path)
-    provider_result = provider.resolve_for_lease(lease_use, str(binding_row.get("secret_ref_handle") or ""))
-    if provider_result.state != ProviderResolveState.RESOLVED or provider_result.secret is None:
-        provider_metadata = provider_result.safe_metadata()
-        append_session_event(
-            session_id,
-            "credential_provider_resolution_failed",
-            {
-                "decision_id": decision_id,
-                "lease_id": minted.lease.lease_id,
-                "provider": minted.lease.provider,
-                "provider_mode": minted.lease.provider_mode,
-                "provider_operation_id": provider_result.provider_operation_id,
-                "provider_resolution_state": provider_result.state.value,
-                "safe_reason": provider_result.safe_reason,
-                "secret_exposed_to_agent": False,
-            },
-        )
-        return {
-            "state": provider_result.state.value,
-            "safe_reason": provider_result.safe_reason,
-            "lease": lease_row,
-            "provider_resolution": provider_metadata,
-        }
-
-    update_credential_lease_provider_operation(minted.lease.lease_id, provider_result.provider_operation_id)
     evidence = dict(lease_use.evidence or {})
-    evidence.update({
-        "provider_operation_id": provider_result.provider_operation_id,
-        "provider_resolution_state": provider_result.state.value,
-    })
+    evidence["secret_known_to_gateway"] = False
     remaining = int(evidence.get("remaining_uses", 0))
     used_row = mark_credential_lease_used(minted.lease.lease_id, uses_remaining=remaining)
     append_session_event(
@@ -183,11 +156,12 @@ def mint_gateway_credential_lease(
             "credential_ref_hash": minted.lease.credential_ref_hash,
             "provider": minted.lease.provider,
             "provider_mode": minted.lease.provider_mode,
-            "provider_operation_id": provider_result.provider_operation_id,
-            "provider_resolution_state": provider_result.state.value,
+            "provider_operation_id": minted.lease.provider_operation_id,
+            "provider_resolution_state": "broker_owned_demo",
             "injection_mode": minted.lease.injection_mode,
             "remaining_uses": remaining,
             "secret_exposed_to_agent": False,
+            "secret_known_to_gateway": False,
             "execution_boundary": "gateway",
         },
     )
@@ -200,5 +174,20 @@ def mint_gateway_credential_lease(
         "binding": safe_binding,
         "lease": used_row or lease_row,
         "evidence": evidence,
-        "provider_resolution": provider_result.safe_metadata(),
     }
+
+
+def _demo_ready_onepassword() -> OnePasswordReadiness:
+    return OnePasswordReadiness(
+        platform_name="demo",
+        desktop_app_present=True,
+        op_cli_path=None,
+        op_cli_version=None,
+        op_account_configured=False,
+        onepassword_mcp_path=None,
+        service_account_token_present=True,
+        status=OnePasswordProviderStatus.READY,
+        provider_modes=["onepassword_sdk_service_account"],
+        setup_required=[],
+        notes=["Demo readiness: secret resolution is broker-owned and never serialized."],
+    )
